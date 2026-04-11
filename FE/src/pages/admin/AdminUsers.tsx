@@ -147,18 +147,26 @@ export const AdminUsers: React.FC = () => {
                     </td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={() => startEdit(u)}
-                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
-                        >
-                          <Edit2 className="h-4 w-4" />
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(u.userId)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {u.role !== 'ADMIN' ? (
+                          <>
+                            <button
+                              onClick={() => startEdit(u)}
+                              className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(u.userId)}
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-xs px-2 py-1 rounded-lg bg-purple-50 text-purple-600 border border-purple-200 font-medium">
+                            Admin
+                          </span>
+                        )}
                       </div>
                     </td>
                   </tr>

@@ -15,6 +15,8 @@ import { reviewRouter }  from './routes/reviews.js';
 import { chatbotRouter } from './routes/chatbot.js';
 import { statsRouter }   from './routes/stats.js';
 
+import { errorHandler } from './middleware/error.js';
+
 const app  = express();
 const PORT = process.env.PORT ?? 4000;
 
@@ -33,10 +35,7 @@ app.use('/api/stats',    statsRouter);
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
 // Global error handler
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
-});
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

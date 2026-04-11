@@ -1,7 +1,7 @@
 import React from 'react';
 import { Calendar, Hash } from 'lucide-react';
 import type { ApiBooking } from '../../lib/api';
-import { formatVND, formatDate } from '../../lib/utils';
+import { formatVND, formatDate, formatTime } from '../../lib/utils';
 import { StatusBadge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 
@@ -43,7 +43,11 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, onCancel }) =
           <div className="flex flex-wrap gap-4">
             <div className="flex items-center gap-1.5 text-xs text-gray-600">
               <Calendar className="h-3.5 w-3.5 text-gray-400" />
-              {formatDate(booking.check_in)} – {formatDate(booking.check_out)}
+              {formatDate(booking.check_in)}
+              {booking.check_in_time && <span className="text-gray-400">{formatTime(booking.check_in_time)}</span>}
+              {' – '}
+              {formatDate(booking.check_out)}
+              {booking.check_out_time && <span className="text-gray-400">{formatTime(booking.check_out_time)}</span>}
             </div>
           </div>
         </div>

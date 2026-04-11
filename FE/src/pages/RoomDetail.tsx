@@ -158,7 +158,27 @@ export const RoomDetail: React.FC = () => {
   const handleBook = () => {
     if (!user) { navigate('/login'); return; }
     if (!checkIn || !checkOut) { alert('Vui lòng chọn ngày nhận và trả phòng'); return; }
-    navigate('/checkout', { state: { room, checkIn, checkOut, guestCount, nights: n } });
+    // Tìm phòng vật lý đầu tiên còn ACTIVE để truyền room_id
+    const firstRoom = room.availableRooms.find((r: any) => r.status === 'ACTIVE') ?? room.availableRooms[0];
+    navigate('/checkout', {
+      state: {
+        room: {
+          room_id:    firstRoom?.room_id ?? null,
+          room_number: firstRoom?.room_number ?? null,
+          name:       room.name,
+          type_name:  room.type,
+          price:      room.price,
+          image:      room.images[0] ?? null,
+          capacity:   room.capacity,
+          area_sqm:   room.area_sqm,
+          beds:       room.beds,
+        },
+        checkIn,
+        checkOut,
+        guestCount,
+        nights: n,
+      },
+    });
   };
 
   if (loading) return (

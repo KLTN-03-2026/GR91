@@ -72,19 +72,20 @@ const statements = [
     type_id     INT,
     room_number VARCHAR(10) NOT NULL UNIQUE,
     floor       INT,
-    status      ENUM('ACTIVE','INACTIVE','MAINTENANCE') DEFAULT 'ACTIVE',
+    status      ENUM('ACTIVE','INACTIVE','MAINTENANCE','CLEANING') DEFAULT 'ACTIVE',
+    room_note   MEDIUMTEXT,
     FOREIGN KEY (type_id) REFERENCES room_types(type_id) ON DELETE SET NULL
   )`,
 
-  // 6. room_images
+  // 9. room_images
   `CREATE TABLE IF NOT EXISTS room_images (
     image_id INT AUTO_INCREMENT PRIMARY KEY,
     room_id  INT,
-    url      VARCHAR(500),
+    url      MEDIUMTEXT,
     FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
   )`,
 
-  // 7. room_inventory
+  // 10. room_inventory
   `CREATE TABLE IF NOT EXISTS room_inventory (
     inventory_id INT AUTO_INCREMENT PRIMARY KEY,
     room_id      INT,
@@ -95,7 +96,38 @@ const statements = [
     FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
   )`,
 
-  // 8. users
+  // 11. room_prices (giá override theo ngày cho từng phòng)
+  `CREATE TABLE IF NOT EXISTS room_prices (
+    id      INT AUTO_INCREMENT PRIMARY KEY,
+    room_id INT,
+    date    DATE,
+    price   DECIMAL(10,2),
+    UNIQUE (room_id, date),
+    FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
+  )`,
+
+  // 12. room_type_prices (giá override theo ngày cho loại phòng)
+  `CREATE TABLE IF NOT EXISTS room_type_prices (
+    id      INT AUTO_INCREMENT PRIMARY KEY,
+    type_id INT,
+    date    DATE,
+    price   DECIMAL(10,2),
+    FOREIGN KEY (type_id) REFERENCES room_types(type_id) ON DELETE CASCADE
+  )`,
+
+  // 13. pricing_rules (quy tắc giá theo giờ check-in/out)
+  `CREATE TABLE IF NOT EXISTS pricing_rules (
+    rule_id     INT AUTO_INCREMENT PRIMARY KEY,
+    rule_type   ENUM('checkin','checkout') NOT NULL,
+    start_hour  INT NOT NULL,
+    end_hour    INT NOT NULL,
+    percent     DECIMAL(5,2) NOT NULL,
+    description VARCHAR(255),
+    is_active   TINYINT(1) DEFAULT 1,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )`,
+
+  // 14. users
   `CREATE TABLE IF NOT EXISTS users (
     user_id    INT AUTO_INCREMENT PRIMARY KEY,
     username   VARCHAR(50) UNIQUE,
@@ -106,13 +138,13 @@ const statements = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`,
 
-  // 9. roles
+  // 15. roles
   `CREATE TABLE IF NOT EXISTS roles (
     role_id   INT AUTO_INCREMENT PRIMARY KEY,
     role_name VARCHAR(50) UNIQUE
   )`,
 
-  // 10. user_roles
+  // 16. user_roles
   `CREATE TABLE IF NOT EXISTS user_roles (
     user_id INT,
     role_id INT,
@@ -121,7 +153,7 @@ const statements = [
     FOREIGN KEY (role_id) REFERENCES roles(role_id)  ON DELETE CASCADE
   )`,
 
-  // 11. bookings
+  // 17. bookings
   `CREATE TABLE IF NOT EXISTS bookings (
     booking_id  INT AUTO_INCREMENT PRIMARY KEY,
     user_id     INT,
@@ -131,7 +163,7 @@ const statements = [
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
   )`,
 
-  // 12. booking_rooms
+  // 18. booking_rooms
   `CREATE TABLE IF NOT EXISTS booking_rooms (
     booking_room_id INT AUTO_INCREMENT PRIMARY KEY,
     booking_id      INT,
@@ -143,7 +175,7 @@ const statements = [
     FOREIGN KEY (room_id)    REFERENCES rooms(room_id)
   )`,
 
-  // 13. booking_guests
+  // 19. booking_guests
   `CREATE TABLE IF NOT EXISTS booking_guests (
     booking_guest_id INT AUTO_INCREMENT PRIMARY KEY,
     booking_id       INT,
@@ -153,7 +185,7 @@ const statements = [
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE CASCADE
   )`,
 
-  // 14. payment_transactions
+  // 20. payment_transactions
   `CREATE TABLE IF NOT EXISTS payment_transactions (
     payment_id       INT AUTO_INCREMENT PRIMARY KEY,
     booking_id       INT,
@@ -164,7 +196,7 @@ const statements = [
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
   )`,
 
-  // 15. reviews
+  // 21. reviews
   `CREATE TABLE IF NOT EXISTS reviews (
     review_id  INT AUTO_INCREMENT PRIMARY KEY,
     booking_id INT,
@@ -176,7 +208,7 @@ const statements = [
     FOREIGN KEY (user_id)    REFERENCES users(user_id)
   )`,
 
-  // 16. chatbot_sessions
+  // 22. chatbot_sessions
   `CREATE TABLE IF NOT EXISTS chatbot_sessions (
     session_id VARCHAR(100) PRIMARY KEY,
     user_id    INT,
@@ -184,7 +216,7 @@ const statements = [
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
   )`,
 
-  // 17. chatbot_messages
+  // 23. chatbot_messages
   `CREATE TABLE IF NOT EXISTS chatbot_messages (
     message_id INT AUTO_INCREMENT PRIMARY KEY,
     session_id VARCHAR(100),
@@ -194,7 +226,7 @@ const statements = [
     FOREIGN KEY (session_id) REFERENCES chatbot_sessions(session_id) ON DELETE CASCADE
   )`,
 
-  // 18. activity_logs
+  // 24. activity_logs
   `CREATE TABLE IF NOT EXISTS activity_logs (
     log_id     INT AUTO_INCREMENT PRIMARY KEY,
     user_id    INT,

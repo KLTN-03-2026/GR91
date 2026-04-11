@@ -1,13 +1,17 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { pool } from '../db/client.js';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth.js';
 
 export const roomRouter = Router();
 
+// Wrap async route để tự động forward error đến global handler
+const h = (fn: (req: any, res: Response, next: NextFunction) => Promise<any>) =>
+  (req: any, res: Response, next: NextFunction) => fn(req, res, next).catch(next);
+
 // ── STATIC / SPECIFIC paths first (must be before /:type_id) ─────────────────
 
 // PATCH /api/rooms/units/:room_id
-roomRouter.patch('/units/:room_id', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+roomRouter.patch('/units/:room_id', requireAuth, requireAdmin, h(async (req: AuthRequest, res: Response) => {
   const { room_number, floor, status, room_note } = req.body;
   const conn = await pool.getConnection();
   try {
@@ -22,13 +26,122 @@ roomRouter.patch('/units/:room_id', requireAuth, requireAdmin, async (req: AuthR
     );
     res.json({ success: true });
   } finally { conn.release(); }
-});
+}));
 
 // DELETE /api/rooms/units/:room_id
 roomRouter.delete('/units/:room_id', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   const conn = await pool.getConnection();
   try {
     await conn.execute('DELETE FROM rooms WHERE room_id = ?', [req.params.room_id]);
+    res.json({ success: true });
+  } finally { conn.release(); }
+});
+
+// GET /api/rooms/units/:room_id/detail — thông tin đầy đủ 1 phòng kèm type + beds
+roomRouter.get('/units/:room_id/detail', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute(`
+      SELECT r.room_id, r.room_number, r.floor, r.status, r.room_note,
+             rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity,
+             rt.area_sqm, rc.name AS category_name,
+             MAX(rp.price) AS override_price,
+             GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds
+      FROM rooms r
+      JOIN room_types rt ON r.type_id = rt.type_id
+      LEFT JOIN room_categories rc  ON rt.category_id = rc.category_id
+      LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = CURDATE()
+      LEFT JOIN room_type_beds rtb  ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt        ON rtb.bed_id = bt.bed_id
+      WHERE r.room_id = ?
+      GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
+               rt.type_id, rt.name, rt.base_price, rt.capacity, rt.area_sqm, rc.name
+    `, [req.params.room_id]) as any[];
+    if (!rows[0]) return res.status(404).json({ error: 'Không tìm thấy phòng' });
+    const r = rows[0];
+    res.json({
+      ...r,
+      override_price: r.override_price ?? null,
+      effective_price: r.override_price ?? r.base_price,
+      beds: r.beds ? r.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
+    });
+  } finally { conn.release(); }
+});
+
+// POST /api/rooms/units/:room_id/retype — tạo loại phòng mới hoặc gán loại có sẵn (Smart Logic)
+roomRouter.post('/units/:room_id/retype', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const { name, base_price, capacity, category_id, area_sqm, bed_id, bed_quantity } = req.body;
+  if (!base_price) return res.status(400).json({ error: 'Thiếu giá phòng' });
+  
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Tìm xem đã có Loại phòng nào khớp hoàn toàn cấu hình này chưa
+    // Cấu hình khớp = cùng base_price, capacity, category_id, area_sqm
+    // Và quan trọng nhất: Cùng loại giường & số lượng giường
+    let targetTypeId: number | null = null;
+
+    const [existingTypes] = await conn.execute(`
+      SELECT rt.type_id 
+      FROM room_types rt
+      LEFT JOIN room_type_beds rtb ON rt.type_id = rtb.type_id
+      WHERE rt.base_price = ? 
+        AND rt.capacity = ? 
+        AND COALESCE(rt.category_id, 0) = COALESCE(?, 0)
+        AND COALESCE(rt.area_sqm, 0)   = COALESCE(?, 0)
+        AND COALESCE(rtb.bed_id, 0)    = COALESCE(?, 0)
+        AND COALESCE(rtb.quantity, 0)  = COALESCE(?, 0)
+      LIMIT 1
+    `, [
+      Number(base_price), 
+      capacity ?? 2, 
+      category_id ?? 0, 
+      area_sqm ?? 0, 
+      bed_id ?? 0, 
+      bed_quantity ?? 0
+    ]) as any[];
+
+    if (existingTypes.length > 0) {
+      targetTypeId = existingTypes[0].type_id;
+    } else {
+      // 2. Nếu không tìm thấy, tạo room_type mới
+      const [typeResult] = await conn.execute(
+        'INSERT INTO room_types (name, base_price, capacity, category_id, area_sqm) VALUES (?,?,?,?,?)',
+        [name || 'Custom Type', Number(base_price), capacity ?? 2, category_id ?? null, area_sqm ?? null]
+      ) as any[];
+      targetTypeId = (typeResult as any).insertId;
+
+      // 2.1 Gán giường cho type mới
+      if (bed_id) {
+        await conn.execute(
+          'INSERT INTO room_type_beds (type_id, bed_id, quantity) VALUES (?,?,?)',
+          [targetTypeId, Number(bed_id), Number(bed_quantity ?? 1)]
+        );
+      }
+    }
+
+    // 3. Gán targetTypeId cho phòng
+    await conn.execute('UPDATE rooms SET type_id = ? WHERE room_id = ?', [targetTypeId, req.params.room_id]);
+
+    await conn.commit();
+    res.status(201).json({ type_id: targetTypeId, reused: existingTypes.length > 0 });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally { conn.release(); }
+});
+
+// PATCH /api/rooms/units/:room_id/type — đổi loại phòng hiện có cho phòng
+roomRouter.patch('/units/:room_id/type', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const { type_id } = req.body;
+  if (!type_id) return res.status(400).json({ error: 'Thiếu type_id' });
+  const conn = await pool.getConnection();
+  try {
+    await conn.execute('UPDATE rooms SET type_id = ? WHERE room_id = ?', [Number(type_id), req.params.room_id]);
     res.json({ success: true });
   } finally { conn.release(); }
 });
@@ -172,6 +285,150 @@ roomRouter.post('/admin/fix-images', requireAuth, requireAdmin, async (req: Auth
   } finally { conn.release(); }
 });
 
+// GET /api/rooms/admin/units-status?date=YYYY-MM-DD — trạng thái phòng theo ngày (admin)
+roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const date = (req.query.date as string) || new Date().toISOString().split('T')[0];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute(`
+      SELECT
+        r.room_id,
+        r.room_number,
+        r.floor,
+        r.status        AS db_status,
+        r.room_note,
+        rt.type_id,
+        rt.name         AS type_name,
+        rt.base_price,
+        COALESCE(MAX(rp.price), rt.base_price) AS effective_price,
+        GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
+        MIN(ri.url)     AS first_image,
+        -- Có booking active vào ngày này không?
+        MAX(CASE
+          WHEN b.status IN ('CONFIRMED','PENDING')
+            AND br.check_in  <= ?
+            AND br.check_out >  ?
+          THEN 1 ELSE 0
+        END) AS is_booked,
+        -- Khách vừa check-out hôm nay (đang dọn phòng)?
+        MAX(CASE
+          WHEN b.status = 'COMPLETED'
+            AND DATE(br.check_out) = ?
+          THEN 1 ELSE 0
+        END) AS is_cleaning
+      FROM rooms r
+      JOIN room_types rt ON r.type_id = rt.type_id
+      LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = ?
+      LEFT JOIN room_type_beds rtb  ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt        ON rtb.bed_id = bt.bed_id
+      LEFT JOIN room_images ri      ON ri.room_id = r.room_id
+      LEFT JOIN booking_rooms br    ON br.room_id = r.room_id
+      LEFT JOIN bookings b          ON b.booking_id = br.booking_id
+      GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
+               rt.type_id, rt.name, rt.base_price
+      ORDER BY r.floor ASC, r.room_number ASC
+    `, [date, date, date, date]) as any[];
+
+    res.json(rows.map((r: any) => {
+      let display_status: string;
+      if (r.db_status === 'MAINTENANCE') {
+        display_status = 'MAINTENANCE';
+      } else if (r.db_status === 'CLEANING') {
+        display_status = 'CLEANING';
+      } else if (r.db_status === 'INACTIVE') {
+        display_status = 'INACTIVE';
+      } else if (r.is_booked) {
+        display_status = 'BOOKED';
+      } else {
+        display_status = 'AVAILABLE';
+      }
+      return {
+        room_id:        r.room_id,
+        room_number:    r.room_number,
+        floor:          r.floor,
+        db_status:      r.db_status,
+        display_status,
+        room_note:      r.room_note ?? null,
+        type_id:        r.type_id,
+        type_name:      r.type_name,
+        base_price:     r.base_price,
+        effective_price: r.effective_price,
+        first_image:    r.first_image ?? null,
+        beds: r.beds ? r.beds.split(',').map((b: string) => {
+          const [name, qty] = b.split(':');
+          return { name, quantity: Number(qty) };
+        }) : [],
+      };
+    }));
+  } finally { conn.release(); }
+});
+
+// GET /api/rooms/available?check_in=&check_out= — phòng còn trống theo room_inventory
+roomRouter.get('/available', async (req: Request, res: Response) => {
+  const { check_in, check_out } = req.query;
+  if (!check_in || !check_out)
+    return res.status(400).json({ success: false, message: 'Thiếu check_in hoặc check_out', code: 'MISSING_FIELDS' });
+
+  const conn = await pool.getConnection();
+  try {
+    const nights = Math.max(1, Math.floor(
+      (new Date(check_out as string).getTime() - new Date(check_in as string).getTime()) / 86400000
+    ));
+
+    // Phòng có đủ ngày available trong room_inventory
+    const [rows] = await conn.execute(`
+      SELECT
+        r.room_id, r.room_number, r.floor, r.status, r.room_note,
+        rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity,
+        rt.description, rt.area_sqm,
+        rc.name AS category_name,
+        COALESCE(SUM(inv.price), rt.base_price * ?) AS total_inventory_price,
+        COUNT(inv.inventory_id) AS available_days,
+        GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
+        GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
+        MIN(ri.url) AS image
+      FROM rooms r
+      JOIN room_types rt ON r.type_id = rt.type_id
+      LEFT JOIN room_categories rc      ON rt.category_id = rc.category_id
+      LEFT JOIN room_inventory inv      ON inv.room_id = r.room_id
+        AND inv.date >= ? AND inv.date < ? AND inv.is_available = 1
+      LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
+      LEFT JOIN amenities a             ON rta.amenity_id = a.amenity_id
+      LEFT JOIN room_type_beds rtb      ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt            ON rtb.bed_id = bt.bed_id
+      LEFT JOIN room_images ri          ON ri.room_id = r.room_id
+      WHERE r.status = 'ACTIVE'
+      GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
+               rt.type_id, rt.name, rt.base_price, rt.capacity, rt.description, rt.area_sqm, rc.name
+      HAVING available_days >= ?
+      ORDER BY rt.base_price ASC, r.floor ASC
+    `, [nights, check_in, check_out, nights]) as any[];
+
+    res.json((rows as any[]).map((r: any) => ({
+      room_id:              r.room_id,
+      room_number:          r.room_number,
+      floor:                r.floor,
+      room_note:            r.room_note ?? null,
+      type_id:              r.type_id,
+      type_name:            r.type_name,
+      base_price:           r.base_price,
+      total_price:          Number(r.total_inventory_price),
+      capacity:             r.capacity,
+      description:          r.description ?? '',
+      area_sqm:             r.area_sqm ?? null,
+      category_name:        r.category_name ?? null,
+      amenities:            r.amenities ? r.amenities.split(',') : [],
+      beds:                 r.beds ? r.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
+      image:                r.image ?? null,
+    })));
+  } finally {
+    conn.release();
+  }
+});
+
 // GET /api/rooms/all-units — tất cả phòng vật lý (public, dùng cho RoomList)
 roomRouter.get('/all-units', async (req: Request, res: Response) => {
   const { min_price, max_price, capacity, check_in, check_out } = req.query;
@@ -200,12 +457,15 @@ roomRouter.get('/all-units', async (req: Request, res: Response) => {
              rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity, rt.description,
              COALESCE(MAX(rp.price), rt.base_price) AS effective_price,
              GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
+             GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
              MIN(ri.url) AS image
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
       LEFT JOIN room_prices rp          ON rp.room_id = r.room_id AND rp.date = CURDATE()
       LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
       LEFT JOIN amenities a             ON rta.amenity_id = a.amenity_id
+      LEFT JOIN room_type_beds rtb      ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt            ON rtb.bed_id = bt.bed_id
       LEFT JOIN room_images ri          ON ri.room_id = r.room_id
       WHERE ${where.join(' AND ')}
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
@@ -217,6 +477,10 @@ roomRouter.get('/all-units', async (req: Request, res: Response) => {
     res.json(rows.map((r: any) => ({
       ...r,
       amenities: r.amenities ? r.amenities.split(',') : [],
+      beds: r.beds ? r.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
     })));
   } finally { conn.release(); }
 });
@@ -290,24 +554,34 @@ roomRouter.get('/', async (req: Request, res: Response) => {
 
 // ── POST / (Admin — create room type) ────────────────────────────────────────
 roomRouter.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { name, description, base_price, capacity, category_id, area_sqm, bed_id } = req.body;
+  const { name, description, base_price, capacity, category_id, area_sqm, beds } = req.body;
   if (!name || !base_price) return res.status(400).json({ error: 'Thiếu thông tin' });
   const conn = await pool.getConnection();
   try {
+    await conn.beginTransaction();
+
     const [result] = await conn.execute(
       'INSERT INTO room_types (name, description, base_price, capacity, category_id, area_sqm) VALUES (?,?,?,?,?,?)',
       [name, description ?? null, base_price, capacity ?? 2, category_id ?? null, area_sqm ?? null]
     ) as any[];
     const typeId = (result as any).insertId;
 
-    if (bed_id) {
-      await conn.execute(
-        'INSERT INTO room_type_beds (type_id, bed_id, quantity) VALUES (?, ?, 1)',
-        [typeId, Number(bed_id)]
-      );
+    if (Array.isArray(beds) && beds.length > 0) {
+      for (const b of beds) {
+        if (b.bed_id) {
+          await conn.execute(
+            'INSERT INTO room_type_beds (type_id, bed_id, quantity) VALUES (?, ?, ?)',
+            [typeId, Number(b.bed_id), Number(b.quantity ?? 1)]
+          );
+        }
+      }
     }
 
+    await conn.commit();
     res.status(201).json({ type_id: typeId });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
   } finally { conn.release(); }
 });
 
@@ -374,9 +648,11 @@ roomRouter.get('/:type_id', async (req: Request, res: Response) => {
 
 // PUT /api/rooms/:type_id (Admin)
 roomRouter.put('/:type_id', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { name, description, base_price, capacity, category_id, area_sqm, bed_id } = req.body;
+  const { name, description, base_price, capacity, category_id, area_sqm, beds } = req.body;
   const conn = await pool.getConnection();
   try {
+    await conn.beginTransaction();
+
     // Cập nhật room_types — chỉ update field nào được gửi
     const sets: string[] = [];
     const vals: any[] = [];
@@ -392,18 +668,26 @@ roomRouter.put('/:type_id', requireAuth, requireAdmin, async (req: AuthRequest, 
       await conn.execute(`UPDATE room_types SET ${sets.join(', ')} WHERE type_id = ?`, vals);
     }
 
-    // Sync giường nếu được gửi
-    if (bed_id !== undefined) {
+    // Sync giường nếu được gửi (Xóa cũ - Thêm mới để đảm bảo tính nhất quán)
+    if (beds !== undefined) {
       await conn.execute('DELETE FROM room_type_beds WHERE type_id = ?', [req.params.type_id]);
-      if (bed_id) {
-        await conn.execute(
-          'INSERT INTO room_type_beds (type_id, bed_id, quantity) VALUES (?, ?, 1)',
-          [req.params.type_id, Number(bed_id)]
-        );
+      if (Array.isArray(beds) && beds.length > 0) {
+        for (const b of beds) {
+          if (b.bed_id) {
+            await conn.execute(
+              'INSERT INTO room_type_beds (type_id, bed_id, quantity) VALUES (?, ?, ?)',
+              [req.params.type_id, Number(b.bed_id), Number(b.quantity ?? 1)]
+            );
+          }
+        }
       }
     }
 
+    await conn.commit();
     res.json({ success: true });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
   } finally { conn.release(); }
 });
 
@@ -424,11 +708,14 @@ roomRouter.get('/:type_id/units', requireAuth, requireAdmin, async (req: AuthReq
       `SELECT r.room_id, r.room_number, r.floor, r.status, r.room_note,
               rt.base_price,
               MAX(rp.price) AS override_price,
+              GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
               GROUP_CONCAT(ri.url ORDER BY ri.image_id SEPARATOR '|||') AS images_concat
        FROM rooms r
        JOIN room_types rt ON r.type_id = rt.type_id
-       LEFT JOIN room_prices rp ON rp.room_id = r.room_id AND rp.date = CURDATE()
-       LEFT JOIN room_images ri ON ri.room_id = r.room_id
+       LEFT JOIN room_prices rp    ON rp.room_id = r.room_id AND rp.date = CURDATE()
+       LEFT JOIN room_type_beds rtb ON rt.type_id = rtb.type_id
+       LEFT JOIN bed_types bt       ON rtb.bed_id = bt.bed_id
+       LEFT JOIN room_images ri     ON ri.room_id = r.room_id
        WHERE r.type_id = ?
        GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note, rt.base_price
        ORDER BY r.floor, r.room_number`,
@@ -443,6 +730,10 @@ roomRouter.get('/:type_id/units', requireAuth, requireAdmin, async (req: AuthReq
       base_price: r.base_price,
       override_price: r.override_price ?? null,
       effective_price: r.override_price ?? r.base_price,
+      beds: r.beds ? r.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
       first_image: r.images_concat ? r.images_concat.split('|||')[0] : null,
     })));
   } finally { conn.release(); }
@@ -459,6 +750,10 @@ roomRouter.post('/:type_id/units', requireAuth, requireAdmin, async (req: AuthRe
       [req.params.type_id, room_number, floor ?? 1, 'ACTIVE']
     ) as any[];
     res.status(201).json({ room_id: (result as any).insertId });
+  } catch (e: any) {
+    if (e.code === 'ER_DUP_ENTRY')
+      return res.status(409).json({ error: `Số phòng "${room_number}" đã tồn tại` });
+    res.status(500).json({ error: e.message ?? 'Lỗi server' });
   } finally { conn.release(); }
 });
 

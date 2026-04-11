@@ -41,6 +41,15 @@ export interface RoomQuery {
   type_id?: number;
 }
 
+// Wrap fetch để bắt lỗi network (server không chạy, mất kết nối...)
+async function safeFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new Error('Không thể kết nối đến máy chủ. Vui lòng kiểm tra server đang chạy.');
+  }
+}
+
 async function get<T>(path: string, params?: Record<string, any>): Promise<T> {
   const url = new URL(BASE + path);
   if (params) {
@@ -48,13 +57,13 @@ async function get<T>(path: string, params?: Record<string, any>): Promise<T> {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
     });
   }
-  const res = await fetch(url.toString(), { headers: authHeaders() });
+  const res = await safeFetch(url.toString(), { headers: authHeaders() });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(BASE + path, {
+  const res = await safeFetch(BASE + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
@@ -106,7 +115,7 @@ export const authApi = {
 };
 
 async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(BASE + path, {
+  const res = await safeFetch(BASE + path, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
@@ -117,7 +126,7 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(BASE + path, {
+  const res = await safeFetch(BASE + path, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
@@ -128,7 +137,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(BASE + path, {
+  const res = await safeFetch(BASE + path, {
     method: 'DELETE',
     headers: { ...authHeaders() },
   });
@@ -190,16 +199,19 @@ export interface ApiBooking {
   status: 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
   total_price: number;
   created_at: string;
+  expires_at?: string | null;
   full_name?: string | null;
   email?: string | null;
   phone?: string | null;
   check_in: string;
   check_out: string;
+  check_in_time?: string | null;
+  check_out_time?: string | null;
   room_price: number;
   room_type: string;
   room_number: string;
   // Detail expansion
-  rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; price: number; image?: string | null }[];
+  rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; check_in_time?: string | null; check_out_time?: string | null; price: number; image?: string | null }[];
   guests?: { booking_guest_id: number; full_name: string; email?: string | null; phone?: string | null }[];
   payments?: { payment_id: number; amount: number; method: string; status: string; transaction_date: string }[];
 }
@@ -227,6 +239,7 @@ export interface RoomUnit {
   base_price?: number;
   override_price?: number | null;
   effective_price?: number;
+  beds?: { name: string; quantity: number }[];
   first_image?: string | null;
   room_note?: string | null;
 }
@@ -236,10 +249,27 @@ export interface Amenity {
   name: string;
 }
 
+export interface RoomDisplayUnit {
+  room_id: number;
+  room_number: string;
+  floor: number;
+  db_status: 'ACTIVE' | 'INACTIVE' | 'MAINTENANCE' | 'CLEANING';
+  display_status: 'AVAILABLE' | 'BOOKED' | 'CLEANING' | 'MAINTENANCE' | 'INACTIVE';
+  room_note: string | null;
+  type_id: number;
+  type_name: string;
+  base_price: number;
+  effective_price: number;
+  first_image: string | null;
+  beds: { name: string; quantity: number }[];
+}
+
 export const adminRoomApi = {
   // Units (phòng vật lý)
   listUnits: (typeId: number | string) =>
     get<RoomUnit[]>(`/rooms/${typeId}/units`),
+  listUnitsStatus: (date?: string) =>
+    get<RoomDisplayUnit[]>('/rooms/admin/units-status', date ? { date } : undefined),
   addUnit: (typeId: number | string, data: { room_number: string; floor: number }) =>
     post<{ room_id: number }>(`/rooms/${typeId}/units`, data),
   updateUnit: (roomId: number, data: Partial<{ room_number: string; floor: number; status: string; room_note: string }>) =>
@@ -274,9 +304,50 @@ export const adminRoomApi = {
     put<{ success: boolean }>(`/rooms/units/${roomId}/price`, { price }),
   resetPrice: (roomId: number) =>
     del<{ success: boolean }>(`/rooms/units/${roomId}/price`),
+  // Room detail (full info with type + beds)
+  getDetail: (roomId: number) =>
+    get<{
+      room_id: number; room_number: string; floor: number; status: string; room_note: string | null;
+      type_id: number; type_name: string; base_price: number; capacity: number;
+      area_sqm: number | null; category_name: string | null;
+      override_price: number | null; effective_price: number;
+      beds: { name: string; quantity: number }[];
+    }>(`/rooms/units/${roomId}/detail`),
+  // Reassign existing room type
+  changeType: (roomId: number, type_id: number) =>
+    patch<{ success: boolean }>(`/rooms/units/${roomId}/type`, { type_id }),
+  // Create new room type and assign to room (transaction)
+  retypeRoom: (roomId: number, data: {
+    name: string; base_price: number; capacity?: number;
+    category_id?: number | null; area_sqm?: number | null;
+    bed_id?: number | null; bed_quantity?: number;
+  }) => post<{ type_id: number }>(`/rooms/units/${roomId}/retype`, data),
   // Booking history of a room unit
   listBookings: (roomId: number) =>
     get<any[]>(`/rooms/units/${roomId}/bookings`),
+};
+
+export interface ApiAvailableRoom {
+  room_id: number;
+  room_number: string;
+  floor: number;
+  room_note: string | null;
+  type_id: number;
+  type_name: string;
+  base_price: number;
+  total_price: number;
+  capacity: number;
+  description: string;
+  area_sqm: number | null;
+  category_name: string | null;
+  amenities: string[];
+  beds: { name: string; quantity: number }[];
+  image: string | null;
+}
+
+export const availableRoomsApi = {
+  list: (check_in: string, check_out: string) =>
+    get<ApiAvailableRoom[]>('/rooms/available', { check_in, check_out }),
 };
 
 export const bookingApi = {
@@ -288,8 +359,10 @@ export const bookingApi = {
     del<{ success: boolean }>(`/bookings/${id}/hard`),
   cancel: (id: number | string) =>
     del<{ success: boolean }>(`/bookings/${id}`),
-  create: (data: { room_id: number; check_in: string; check_out: string; guests: { full_name: string; email?: string; phone?: string }[]; payment_method?: string }) =>
-    post<{ booking_id: number; total_price: number }>('/bookings', data),
+  create: (data: { room_id: number; check_in: string; check_out: string; check_in_time?: string; check_out_time?: string; guests: { full_name: string; email?: string; phone?: string }[]; payment_method?: string }) =>
+    post<{ success: boolean; booking_id: number; total_price: number; base_price: number; early_fee: number; late_fee: number; nights: number; expires_at: string }>('/bookings', data),
+  pay: (id: number | string) =>
+    patch<{ success: boolean; booking_id: number; status: string }>(`/bookings/${id}/pay`, {}),
 };
 
 export const statsApi = {

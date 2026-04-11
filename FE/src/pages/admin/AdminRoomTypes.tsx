@@ -186,6 +186,7 @@ export const AdminRoomTypes: React.FC = () => {
                   <tr className="bg-gray-50 text-xs text-gray-500 uppercase">
                     <th className="px-5 py-3">Số phòng</th>
                     <th className="px-5 py-3">Tầng</th>
+                    <th className="px-5 py-3">Giường</th>
                     <th className="px-5 py-3">Giá / đêm</th>
                     <th className="px-5 py-3">Trạng thái</th>
                     <th className="px-5 py-3"></th>
@@ -195,10 +196,14 @@ export const AdminRoomTypes: React.FC = () => {
                   {units.map((u) => {
                     const hasOverride = u.override_price != null;
                     const st = STATUS_MAP[u.status] ?? STATUS_MAP.ACTIVE;
+                    const bedLabel = u.beds?.length
+                      ? u.beds.map((b) => `${b.quantity} ${b.name}`).join(' + ')
+                      : '—';
                     return (
                       <tr key={u.room_id} className="hover:bg-gray-50">
                         <td className="px-5 py-3 text-sm font-medium text-gray-900">Phòng {u.room_number}</td>
                         <td className="px-5 py-3 text-sm text-gray-600">Tầng {u.floor}</td>
+                        <td className="px-5 py-3 text-sm text-gray-600">{bedLabel}</td>
                         <td className="px-5 py-3">
                           <span className={`text-sm font-semibold ${hasOverride ? 'text-orange-600' : 'text-gray-900'}`}>
                             {formatVND(u.effective_price ?? u.base_price ?? 0)}

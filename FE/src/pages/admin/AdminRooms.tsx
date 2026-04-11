@@ -4,24 +4,30 @@ import { Card } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Link } from 'react-router-dom';
-import { roomApi, type ApiRoom, type RoomCategory, type BedType } from '../../lib/api';
+import { roomApi, type ApiRoom, type RoomCategory } from '../../lib/api';
 import { formatVND } from '../../lib/utils';
 import { useToast } from '../../components/ui/Toast';
 
 const EMPTY_FORM = {
   name: '', description: '', base_price: '', capacity: '2',
-  category_id: '', area_sqm: '', bed_id: '',
+  category_id: '', area_sqm: '',
 };
+
+interface FormBed {
+  bed_id: number;
+  quantity: number;
+}
 
 export const AdminRooms: React.FC = () => {
   const [rooms, setRooms]           = useState<ApiRoom[]>([]);
   const [categories, setCategories] = useState<RoomCategory[]>([]);
-  const [bedTypes, setBedTypes]     = useState<BedType[]>([]);
+  const [bedTypes, setBedTypes]     = useState<any[]>([]);
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState('');
   const [modal, setModal]           = useState<'add' | 'edit' | null>(null);
   const [editing, setEditing]       = useState<ApiRoom | null>(null);
   const [form, setForm]             = useState(EMPTY_FORM);
+  const [formBeds, setFormBeds]     = useState<FormBed[]>([]);
   const [autoName, setAutoName]     = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState('');
@@ -31,20 +37,45 @@ export const AdminRooms: React.FC = () => {
   const load = () => {
     setLoading(true);
     Promise.all([roomApi.list(), roomApi.listCategories(), roomApi.listBedTypes()])
-      .then(([r, c, bt]) => { setRooms(r); setCategories(c); setBedTypes(bt); })
+      .then(([r, c, bt]) => { 
+        setRooms(r); 
+        setCategories(c);
+        setBedTypes(bt);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, []);
 
-  // Khi category hoặc bed thay đổi, tự cập nhật tên nếu đang ở chế độ auto
+  // Logic tạo tên tự động chuyên nghiệp
+  const generateRoomName = (catId: string, beds: FormBed[]) => {
+    const cat = categories.find(c => String(c.category_id) === catId);
+    if (!cat) return '';
+
+    const catName = cat.name;
+
+    if (beds.length === 1) {
+      const b = beds[0];
+      const bedType = bedTypes.find(bt => bt.bed_id === b.bed_id);
+      if (bedType) {
+        if (bedType.name === 'Single' && b.quantity === 2) {
+          return `${catName} Twin Room`;
+        }
+        if (bedType.name === 'Double' && b.quantity === 1) {
+          return `${catName} Double Room`;
+        }
+      }
+    }
+
+    return `${catName} Room`;
+  };
+
+  // Cập nhật tên tự động khi Hạng phòng hoặc Giường thay đổi
   useEffect(() => {
     if (!autoName) return;
-    const catName = categories.find((c) => String(c.category_id) === form.category_id)?.name ?? '';
-    const bedName = bedTypes.find((b) => String(b.bed_id) === form.bed_id)?.name ?? '';
-    const parts = [catName, bedName].filter(Boolean);
-    if (parts.length) setForm((f) => ({ ...f, name: parts.join(' - ') }));
-  }, [form.category_id, form.bed_id, autoName, categories, bedTypes]);
+    const newName = generateRoomName(form.category_id, formBeds);
+    if (newName) setForm(f => ({ ...f, name: newName }));
+  }, [form.category_id, formBeds, autoName, categories, bedTypes]);
 
   const filtered = rooms.filter((r) =>
     r.type_name.toLowerCase().includes(search.toLowerCase())
@@ -52,6 +83,7 @@ export const AdminRooms: React.FC = () => {
 
   const openAdd = () => {
     setForm(EMPTY_FORM);
+    setFormBeds([]);
     setAutoName(true);
     setEditing(null);
     setError('');
@@ -59,7 +91,6 @@ export const AdminRooms: React.FC = () => {
   };
 
   const openEdit = (r: ApiRoom) => {
-    const firstBed = r.beds?.[0];
     setForm({
       name: r.type_name,
       description: r.description ?? '',
@@ -67,8 +98,12 @@ export const AdminRooms: React.FC = () => {
       capacity: String(r.capacity),
       category_id: r.category_id ? String(r.category_id) : '',
       area_sqm: r.area_sqm ? String(r.area_sqm) : '',
-      bed_id: firstBed ? String(bedTypes.find((bt) => bt.name === firstBed.name)?.bed_id ?? '') : '',
     });
+    setFormBeds(r.beds ? r.beds.map((b: any) => {
+      // Tìm bed_id từ bedTypes nếu b.name được trả về
+      const bt = bedTypes.find(t => t.name === b.name);
+      return { bed_id: bt?.bed_id || 0, quantity: b.quantity };
+    }).filter(b => b.bed_id > 0) : []);
     setAutoName(false);
     setEditing(r);
     setError('');
@@ -86,7 +121,7 @@ export const AdminRooms: React.FC = () => {
         capacity: Number(form.capacity),
         category_id: form.category_id ? Number(form.category_id) : null,
         area_sqm: form.area_sqm ? Number(form.area_sqm) : null,
-        bed_id: form.bed_id ? Number(form.bed_id) : null,
+        beds: formBeds,
       };
       if (modal === 'add') {
         await roomApi.create(payload);
@@ -186,7 +221,7 @@ export const AdminRooms: React.FC = () => {
                     </td>
                     <td className="px-5 py-4 text-sm text-gray-600">
                       {room.beds?.length
-                        ? room.beds.map((b) => `${b.quantity} ${b.name}`).join(', ')
+                        ? room.beds.map((b) => `${b.quantity} ${b.name}`).join(' + ')
                         : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-5 py-4 text-sm text-gray-600">
@@ -247,16 +282,6 @@ export const AdminRooms: React.FC = () => {
               </Field>
             </div>
 
-            {/* Loại giường */}
-            <Field label="Loại giường">
-              <select value={form.bed_id} onChange={set('bed_id')} className={inputCls}>
-                <option value="">-- Chọn loại giường --</option>
-                {bedTypes.map((bt) => (
-                  <option key={bt.bed_id} value={bt.bed_id}>{bt.name}</option>
-                ))}
-              </select>
-            </Field>
-
             {/* Tên — tự động hoặc tay */}
             <Field label={
               <span className="flex items-center gap-2">
@@ -289,6 +314,52 @@ export const AdminRooms: React.FC = () => {
               <Field label="Sức chứa (khách)">
                 <input type="number" value={form.capacity} onChange={set('capacity')} min={1} max={20} className={inputCls} />
               </Field>
+            </div>
+
+            {/* Giường — Quản lý mảng dynamic */}
+            <div className="pt-4 border-t border-gray-100">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Cấu hình giường</label>
+                <button type="button" onClick={() => setFormBeds([...formBeds, { bed_id: 0, quantity: 1 }])}
+                  className="text-xs font-medium text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <Plus className="h-3 w-3" /> Thêm giường
+                </button>
+              </div>
+              
+              <div className="space-y-3">
+                {formBeds.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-2 italic">Chưa có thông tin giường</p>
+                )}
+                {formBeds.map((b, idx) => (
+                  <div key={idx} className="flex gap-2 items-end animate-in fade-in slide-in-from-top-1">
+                    <div className="flex-1">
+                      <select value={b.bed_id} 
+                        onChange={(e) => {
+                          const newBeds = [...formBeds];
+                          newBeds[idx].bed_id = Number(e.target.value);
+                          setFormBeds(newBeds);
+                        }}
+                        className={inputCls}>
+                        <option value={0}>-- Loại giường --</option>
+                        {bedTypes.map(bt => <option key={bt.bed_id} value={bt.bed_id}>{bt.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="w-20">
+                      <input type="number" min={1} value={b.quantity}
+                        onChange={(e) => {
+                          const newBeds = [...formBeds];
+                          newBeds[idx].quantity = Number(e.target.value);
+                          setFormBeds(newBeds);
+                        }}
+                        className={inputCls + ' text-center'} />
+                    </div>
+                    <button type="button" onClick={() => setFormBeds(formBeds.filter((_, i) => i !== idx))}
+                      className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
