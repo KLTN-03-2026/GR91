@@ -21,7 +21,10 @@ const AMENITY_ICONS: Record<string, React.ReactNode> = {
 export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => {
   if (layout === 'grid') {
     return (
-      <div className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all group border border-gray-100">
+      <Link
+        to={`/rooms/${room.id}`}
+        className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all group border border-gray-100 block"
+      >
         <div className="relative h-52 overflow-hidden p-2">
           <img
             src={room.image}
@@ -50,27 +53,26 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
                 {formatVND(room.price)}<span className="text-xs font-normal text-gray-500">/đêm</span>
               </p>
             </div>
-            <Link
-              to={`/rooms/${room.id}`}
-              className="bg-blue-50 text-blue-600 p-2 rounded-full hover:bg-blue-100 transition-colors"
-              aria-label={`Xem chi tiết ${room.name}`}
-            >
+            <span className="bg-blue-50 text-blue-600 p-2 rounded-full group-hover:bg-blue-100 transition-colors">
               <ArrowRight className="h-4 w-4" />
-            </Link>
+            </span>
           </div>
         </div>
-      </div>
+      </Link>
     );
   }
 
   // List layout
   return (
-    <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 flex flex-col md:flex-row hover:shadow-md transition-shadow">
+    <Link
+      to={`/rooms/${room.id}`}
+      className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 flex flex-col md:flex-row hover:shadow-md transition-shadow group block"
+    >
       <div className="md:w-2/5 h-56 md:h-auto relative shrink-0">
         <img
           src={room.image}
           alt={room.name}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
           referrerPolicy="no-referrer"
         />
         <div className="absolute top-3 left-3 flex items-center gap-1 bg-white/90 backdrop-blur-sm px-2.5 py-1 rounded-full">
@@ -110,14 +112,11 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
             <p className="text-xs text-gray-500 mb-0.5">Giá mỗi đêm từ</p>
             <span className="text-2xl font-bold text-blue-600">{formatVND(room.price)}</span>
           </div>
-          <Link
-            to={`/rooms/${room.id}`}
-            className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
-          >
+          <span className="bg-gray-900 group-hover:bg-gray-800 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
             Xem chi tiết
-          </Link>
+          </span>
         </div>
       </div>
-    </div>
+    </Link>
   );
 };

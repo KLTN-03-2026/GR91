@@ -192,6 +192,38 @@ export interface ApiReview {
   full_name: string;
   username: string;
   room_type: string;
+  status: 'VISIBLE' | 'HIDDEN';
+}
+
+export interface MyReview {
+  review_id: number;
+  booking_id: number;
+  room_type_id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  status: 'VISIBLE' | 'HIDDEN';
+}
+
+export interface AdminReview extends ApiReview {
+  booking_id: number;
+  room_type_id: number;
+  email?: string | null;
+  room_number?: string | null;
+  floor?: number | null;
+  room_id?: number | null;
+  room_image?: string | null;
+}
+
+export interface ReviewStats {
+  total: number;
+  visible: number;
+  hidden: number;
+  avg_rating: number;
+  five_star: number;
+  four_star: number;
+  three_star: number;
+  low_star: number;
 }
 
 export interface ApiBooking {
@@ -210,6 +242,7 @@ export interface ApiBooking {
   room_price: number;
   room_type: string;
   room_number: string;
+  type_id?: number | null;
   // Detail expansion
   rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; check_in_time?: string | null; check_out_time?: string | null; price: number; image?: string | null }[];
   guests?: { booking_guest_id: number; full_name: string; email?: string | null; phone?: string | null }[];
@@ -218,6 +251,20 @@ export interface ApiBooking {
 
 export const reviewApi = {
   list: (type_id: number | string) => get<ApiReview[]>('/reviews', { type_id }),
+  myReviews: () => get<MyReview[]>('/reviews/my'),
+  /** @deprecated use myReviews() */
+  myReviewedBookings: () => get<MyReview[]>('/reviews/my'),
+  create: (data: { booking_id: number; rating: number; comment?: string }) =>
+    post<{ review_id: number }>('/reviews', data),
+  update: (reviewId: number, data: { rating: number; comment?: string }) =>
+    patch<{ success: boolean }>(`/reviews/${reviewId}`, data),
+  adminList: (query?: { status?: string; type_id?: number; rating?: number }) =>
+    get<AdminReview[]>('/reviews/admin', query as any),
+  adminStats: () => get<ReviewStats>('/reviews/admin/stats'),
+  setVisibility: (reviewId: number, status: 'VISIBLE' | 'HIDDEN') =>
+    patch<{ success: boolean }>(`/reviews/${reviewId}/visibility`, { status }),
+  remove: (reviewId: number) =>
+    del<{ success: boolean }>(`/reviews/${reviewId}`),
 };
 
 export const userApi = {

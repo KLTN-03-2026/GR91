@@ -25,6 +25,7 @@ import { AdminSettings } from './pages/admin/AdminSettings';
 import { AdminRoomTypes } from './pages/admin/AdminRoomTypes';
 import { AdminRoomUnit } from './pages/admin/AdminRoomUnit';
 import { AdminRoomUnits } from './pages/admin/AdminRoomUnits';
+import { AdminReviews } from './pages/admin/AdminReviews';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 
@@ -51,6 +52,7 @@ export default function App() {
               <Route path="room-units" element={<AdminRoomUnits />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="bookings" element={<AdminBookings />} />
+              <Route path="reviews" element={<AdminReviews />} />
               <Route path="settings" element={<AdminSettings />} />
            </Route>
             <Route path="/login" element={<Login />} />

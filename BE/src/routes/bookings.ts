@@ -108,7 +108,7 @@ bookingRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
                u.full_name, u.email, u.phone,
                br.check_in, br.check_out, br.check_in_time, br.check_out_time,
                br.price AS room_price,
-               rt.name AS room_type, r.room_number,
+               rt.type_id, rt.name AS room_type, r.room_number,
                MIN(ri.url) AS room_image
         FROM bookings b
         LEFT JOIN users u          ON b.user_id = u.user_id
@@ -119,7 +119,7 @@ bookingRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         ${where}
         GROUP BY b.booking_id, u.full_name, u.email, u.phone,
                  br.check_in, br.check_out, br.check_in_time, br.check_out_time,
-                 br.price, rt.name, r.room_number
+                 br.price, rt.type_id, rt.name, r.room_number
         ORDER BY b.created_at DESC
       `;
     } else {
@@ -127,7 +127,7 @@ bookingRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         SELECT b.booking_id, b.status, b.total_price, b.created_at, b.expires_at,
                br.check_in, br.check_out, br.check_in_time, br.check_out_time,
                br.price AS room_price,
-               rt.name AS room_type, r.room_number,
+               rt.type_id, rt.name AS room_type, r.room_number,
                MIN(ri.url) AS room_image
         FROM bookings b
         LEFT JOIN booking_rooms br ON br.booking_id = b.booking_id
@@ -136,7 +136,7 @@ bookingRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         LEFT JOIN room_images ri   ON ri.room_id = r.room_id
         WHERE b.user_id = ?
         GROUP BY b.booking_id, br.check_in, br.check_out, br.check_in_time, br.check_out_time,
-                 br.price, rt.name, r.room_number
+                 br.price, rt.type_id, rt.name, r.room_number
         ORDER BY b.created_at DESC
       `;
       params = [req.userId!];
