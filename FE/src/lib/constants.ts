@@ -12,6 +12,7 @@ export const ROOM_TYPES = ['Standard', 'Superior', 'Deluxe', 'Suite', 'Villa'] a
 export const AMENITY_FILTERS = ['Wifi miễn phí', 'Hồ bơi', 'Spa', 'Phòng Gym', 'Bữa sáng'];
 
 export const SORT_OPTIONS = [
+  { value: 'recommend', label: 'Dành cho bạn' },
   { value: 'popular', label: 'Phổ biến nhất' },
   { value: 'price_asc', label: 'Giá: Thấp đến cao' },
   { value: 'price_desc', label: 'Giá: Cao xuống thấp' },

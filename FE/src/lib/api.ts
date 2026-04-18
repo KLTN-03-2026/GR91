@@ -168,6 +168,7 @@ export interface ApiRoomUnit {
 export const roomApi = {
   list: (query?: RoomQuery) => get<ApiRoom[]>('/rooms', query as any),
   listUnits: (query?: RoomQuery) => get<ApiRoomUnit[]>('/rooms/all-units', query as any),
+  recommendations: (limit: number = 10) => get<ApiRoom[]>('/rooms/recommendations', { limit }),
   detail: (typeId: number | string) => get<ApiRoom>(`/rooms/${typeId}`),
   create: (data: { name: string; description?: string; base_price: number; capacity: number; category_id?: number | null; area_sqm?: number | null; bed_id?: number | null }) =>
     post<{ type_id: number }>('/rooms', data),
@@ -414,4 +415,40 @@ export const bookingApi = {
 
 export const statsApi = {
   get: (query?: ListQuery) => get<ApiStats>('/stats', query as any),
+};
+
+export interface PhysicalRoomDetail {
+  room_id: number;
+  room_number: string;
+  floor: number;
+  status: string;
+  room_note: string | null;
+  type_id: number;
+  type_name: string;
+  base_price: number;
+  effective_price: number;
+  capacity: number;
+  description: string;
+  area_sqm: number | null;
+  category_name: string | null;
+  override_price: number | null;
+  beds: { name: string; quantity: number }[];
+  amenities: string[];
+  images: string[];
+  image?: string;
+  extra_images?: string[];
+  price_per_night?: number;
+  availability_status: string;
+  pricing_rules?: { rule_id: number; rule_type: 'checkin' | 'checkout'; start_hour: number; end_hour: number; percent: number; description: string }[];
+}
+
+export const publicRoomApi = {
+  getPhysicalDetail: (roomId: number | string) =>
+    get<PhysicalRoomDetail>(`/rooms/physical/${roomId}`),
+  getAvailability: (roomId: number | string) =>
+    get<string[]>(`/rooms/physical/${roomId}/availability`),
+  getSimilarRooms: (roomId: number | string, query?: { check_in?: string; check_out?: string }) =>
+    get<any[]>(`/rooms/physical/${roomId}/similar`, query),
+  getPricingRules: () =>
+    get<{ rule_id: number; rule_type: 'checkin' | 'checkout'; start_hour: number; end_hour: number; percent: number; description: string }[]>('/rooms/pricing-rules'),
 };

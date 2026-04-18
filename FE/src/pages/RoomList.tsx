@@ -23,11 +23,12 @@ export const RoomList: React.FC = () => {
   const [minPrice, setMinPrice] = useState(0);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedFloors, setSelectedFloors] = useState<number[]>([]);
-  const [sortBy, setSortBy]     = useState('price_asc');
+  const [sortBy, setSortBy]     = useState(searchParams.get('sort') || 'price_asc');
   const [filterOpen, setFilterOpen] = useState(false);
   const [page, setPage]         = useState(1);
 
   const [units, setUnits]     = useState<ApiRoomUnit[]>([]);
+  const [recommendedTypes, setRecommendedTypes] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
 
@@ -48,6 +49,10 @@ export const RoomList: React.FC = () => {
 
   useEffect(() => { fetchUnits(); }, [fetchUnits]);
 
+  useEffect(() => {
+    roomApi.recommendations(20).then(data => setRecommendedTypes(data.map((r: any) => r.type_id))).catch(() => {});
+  }, []);
+
   // Lấy danh sách loại phòng động từ data
   const availableTypes = [...new Set(units.map((u) => u.type_name))].sort();
 
@@ -61,6 +66,13 @@ export const RoomList: React.FC = () => {
     .filter((u) => selectedTypes.length === 0 || selectedTypes.includes(u.type_name))
     .filter((u) => selectedFloors.length === 0 || selectedFloors.includes(u.floor))
     .sort((a, b) => {
+      if (sortBy === 'recommend' && recommendedTypes.length > 0) {
+        const indexA = recommendedTypes.indexOf(a.type_id);
+        const indexB = recommendedTypes.indexOf(b.type_id);
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+      }
       const pa = a.effective_price ?? a.base_price;
       const pb = b.effective_price ?? b.base_price;
       if (sortBy === 'price_asc')  return pa - pb;
@@ -341,7 +353,7 @@ function UnitCard({ unit }: { unit: ApiRoomUnit }) {
               )}
             </div>
           </div>
-          <Link to={`/rooms/${unit.type_id}`}
+          <Link to={`/room/${unit.room_id}`}
             className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
             Xem chi tiết
           </Link>

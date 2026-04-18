@@ -92,8 +92,14 @@ const statements = [
     date         DATE NOT NULL,
     is_available TINYINT(1) DEFAULT 1,
     price        INT,
+    status       ENUM('AVAILABLE','PENDING','BOOKED','BLOCKED') DEFAULT 'AVAILABLE',
+    booking_id   INT NULL,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE (room_id, date),
-    FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
+    KEY idx_room_date_status (room_id, date, status),
+    KEY idx_booking_id (booking_id),
+    FOREIGN KEY (room_id)    REFERENCES rooms(room_id)    ON DELETE CASCADE,
+    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE SET NULL
   )`,
 
   // 11. room_prices (giá override theo ngày cho từng phòng)
@@ -160,6 +166,7 @@ const statements = [
     total_price INT,
     status      ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED') DEFAULT 'PENDING',
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NULL DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
   )`,
 
@@ -171,6 +178,8 @@ const statements = [
     check_in        DATE NOT NULL,
     check_out       DATE NOT NULL,
     price           INT,
+    check_in_time   TIME NULL,
+    check_out_time  TIME NULL,
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE CASCADE,
     FOREIGN KEY (room_id)    REFERENCES rooms(room_id)
   )`,
@@ -198,14 +207,18 @@ const statements = [
 
   // 21. reviews
   `CREATE TABLE IF NOT EXISTS reviews (
-    review_id  INT AUTO_INCREMENT PRIMARY KEY,
-    booking_id INT,
-    user_id    INT,
-    rating     INT CHECK (rating >= 1 AND rating <= 5),
-    comment    TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id),
-    FOREIGN KEY (user_id)    REFERENCES users(user_id)
+    review_id    INT AUTO_INCREMENT PRIMARY KEY,
+    booking_id   INT,
+    user_id      INT,
+    room_type_id INT NOT NULL,
+    rating       INT CHECK (rating >= 1 AND rating <= 5),
+    comment      TEXT,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status       ENUM('VISIBLE','HIDDEN') DEFAULT 'VISIBLE',
+    UNIQUE KEY unique_review (user_id, booking_id),
+    FOREIGN KEY (booking_id)   REFERENCES bookings(booking_id),
+    FOREIGN KEY (user_id)      REFERENCES users(user_id),
+    FOREIGN KEY (room_type_id) REFERENCES room_types(type_id) ON DELETE CASCADE
   )`,
 
   // 22. chatbot_sessions

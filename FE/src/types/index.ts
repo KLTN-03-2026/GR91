@@ -19,6 +19,7 @@ export interface Room {
   amenities: string[];
   isPopular?: boolean;
   discount?: number;
+  roomCount?: number;
 }
 
 export interface Booking {

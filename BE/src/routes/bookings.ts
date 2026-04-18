@@ -62,7 +62,7 @@ async function releaseExpiredBookings() {
           UPDATE room_inventory ri
           JOIN booking_rooms br ON ri.room_id = br.room_id
             AND ri.date >= br.check_in AND ri.date < br.check_out
-          SET ri.is_available = 1
+          SET ri.status = 'AVAILABLE', ri.booking_id = NULL
           WHERE br.booking_id = ?
         `, [row.booking_id]);
 
@@ -243,7 +243,7 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
 
     // 2. Lock rows trong room_inventory (nếu có) để tránh double booking
     const [invRows] = await conn.execute(`
-      SELECT inventory_id, date, is_available, price
+      SELECT inventory_id, date, status, price
       FROM room_inventory
       WHERE room_id = ? AND date >= ? AND date < ?
       FOR UPDATE
@@ -252,10 +252,9 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
     const inv = invRows as any[];
     const hasInventory = inv.length > 0;
 
-    // 3. Kiểm tra availability
+    // 3. Kiểm tra availability — chỉ dùng status
     if (hasInventory) {
-      // Có inventory → dùng inventory làm nguồn sự thật
-      const availableDays = inv.filter((r: any) => r.is_available === 1);
+      const availableDays = inv.filter((r: any) => r.status === 'AVAILABLE');
       if (availableDays.length < nights) {
         await conn.rollback();
         return res.status(409).json({
@@ -309,13 +308,13 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
       [bookingId, room_id, check_in, check_out, check_in_time ?? null, check_out_time ?? null, basePrice]
     );
 
-    // 7. Đánh dấu room_inventory là không còn trống (chỉ khi có inventory)
+    // 7. Đánh dấu room_inventory: status = BOOKED, booking_id (trigger tự sync is_available)
     if (hasInventory) {
       await conn.execute(`
         UPDATE room_inventory
-        SET is_available = 0
+        SET status = 'BOOKED', booking_id = ?
         WHERE room_id = ? AND date >= ? AND date < ?
-      `, [room_id, check_in, check_out]);
+      `, [bookingId, room_id, check_in, check_out]);
     }
 
     // 8. Insert guests
@@ -465,8 +464,8 @@ bookingRouter.delete('/:id', requireAuth, async (req: AuthRequest, res: Response
         UPDATE room_inventory ri
         JOIN booking_rooms br ON ri.room_id = br.room_id
           AND ri.date >= br.check_in AND ri.date < br.check_out
-        SET ri.is_available = 1
-        WHERE br.booking_id = ?
+        SET ri.status = 'AVAILABLE', ri.booking_id = NULL
+          WHERE br.booking_id = ?
           AND EXISTS (SELECT 1 FROM room_inventory WHERE room_id = ri.room_id LIMIT 1)
       `, [req.params.id]);
     }

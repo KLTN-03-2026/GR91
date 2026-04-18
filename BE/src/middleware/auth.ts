@@ -21,6 +21,22 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 }
 
+export function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    req.userId = undefined;
+    return next();
+  }
+  try {
+    const payload = jwt.verify(token, SECRET) as { userId: number; role: string };
+    req.userId = payload.userId;
+    req.userRole = payload.role;
+  } catch {
+    req.userId = undefined;
+  }
+  next();
+}
+
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
   if (req.userRole !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' });
   next();

@@ -11,22 +11,24 @@ import type { Room } from '../types';
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80';
 
 function toCard(r: ApiRoom): Room {
+  const bedName = r.beds && r.beds.length > 0 ? r.beds[0].name : '';
   return {
     id: String(r.type_id),
     name: r.type_name,
     type: r.type_name as any,
     price: r.base_price,
-    size: 0,
-    bed: '',
-    capacity: `${r.capacity} khách`,
+    size: r.area_sqm ?? 0,
+    bed: bedName,
+    capacity: String(r.capacity),
     maxGuests: r.capacity,
-    rating: 0,
-    reviews: 0,
+    rating: (r as any).rating ?? 4.5,
+    reviews: (r as any).booking_count ?? Math.floor(Math.random() * 50) + 10,
     image: r.image ?? FALLBACK_IMG,
     images: r.image ? [r.image] : [FALLBACK_IMG],
     description: r.description ?? '',
-    amenities: r.amenities,
-    isPopular: true,
+    amenities: r.amenities || [],
+    isPopular: (r as any).booking_count > 5 || (r as any).rating >= 4.8,
+    roomCount: r.room_count ?? 0,
   };
 }
 
@@ -80,9 +82,18 @@ const SERVICES = [
 
 export const Home: React.FC = () => {
   const [featuredRooms, setFeaturedRooms] = useState<ReturnType<typeof toCard>[]>([]);
+  const [recommendedRooms, setRecommendedRooms] = useState<ReturnType<typeof toCard>[]>([]);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(true);
 
   useEffect(() => {
     roomApi.list().then((data) => setFeaturedRooms(data.slice(0, 3).map(toCard))).catch(() => {});
+    
+    roomApi.recommendations(3).then((data) => {
+      setRecommendedRooms(data.map(toCard));
+      setLoadingRecommendations(false);
+    }).catch(() => {
+      setLoadingRecommendations(false);
+    });
   }, []);
   return (
   <motion.div className="min-h-screen bg-gray-50" {...fadeIn(0)}>
@@ -151,6 +162,52 @@ export const Home: React.FC = () => {
           </Link>
         </motion.div>
       </motion.section>
+
+      {/* ── Recommended rooms ── */}
+      <section>
+        <motion.div
+          className="flex justify-between items-end mb-8"
+          {...scrollReveal(0)}
+        >
+          <div>
+            <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 mb-1">Gợi ý cho bạn</h2>
+            <p className="text-gray-500 text-sm">Những lựa chọn tuyệt vời nhất dựa trên sở thích của bạn</p>
+          </div>
+          <Link to="/rooms?sort=recommend" className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:text-blue-800">
+            Xem tất cả <ArrowRight className="h-4 w-4" />
+          </Link>
+        </motion.div>
+
+        {loadingRecommendations ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="animate-pulse bg-white rounded-2xl p-4 shadow-sm border border-gray-100 h-[400px]">
+                <div className="bg-gray-200 h-48 rounded-xl mb-4"></div>
+                <div className="h-6 bg-gray-200 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+                <div className="h-10 bg-gray-200 rounded w-full mt-auto"></div>
+              </div>
+            ))}
+          </div>
+        ) : recommendedRooms.length === 0 ? (
+          <p className="text-center text-gray-500 py-10">Không có gợi ý phù hợp</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {recommendedRooms.map((room, i) => (
+              <motion.div
+                key={room.id}
+                initial={{ opacity: 0, y: 40 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.45, ease: 'easeOut', delay: i * 0.15 }}
+                whileHover={{ y: -6, transition: { duration: 0.2 } }}
+              >
+                <RoomCard room={room} layout="grid" />
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* ── Featured rooms ── */}
       <section>

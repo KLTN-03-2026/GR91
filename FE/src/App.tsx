@@ -9,9 +9,11 @@ import { AuthProvider } from './lib/auth';
 import { ToastProvider } from './components/ui/Toast';
 import { Header } from './components/layout/Header';
 import { Footer } from './components/layout/Footer';
+import { ScrollToTop } from './components/layout/ScrollToTop';
 import { Home } from './pages/Home';
 import { RoomList } from './pages/RoomList';
 import { RoomDetail } from './pages/RoomDetail';
+import { PhysicalRoomDetail } from './pages/PhysicalRoomDetail';
 import { Checkout } from './pages/Checkout';
 import { Profile } from './pages/Profile';
 import { BookingHistory } from './pages/BookingHistory';
@@ -34,6 +36,7 @@ export default function App() {
     <AuthProvider>
       <ToastProvider>
       <Router>
+      <ScrollToTop />
       <div className="flex flex-col min-h-screen">
         <Header />
         <main className="flex-grow">
@@ -41,6 +44,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/rooms" element={<RoomList/>} />
             <Route path="/rooms/:id" element={<RoomDetail />} />
+            <Route path="/room/:room_id" element={<PhysicalRoomDetail />} />
             <Route path="/checkout" element={<Checkout />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/history" element={<BookingHistory />} />
