@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BedDouble, DoorOpen, Users, CalendarCheck, Settings, LogOut, Building2, Star } from 'lucide-react';
+import { LayoutDashboard, BedDouble, DoorOpen, Users, CalendarCheck, Settings, LogOut, Building2, Star, FileText } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 
 const NAV_ITEMS = [
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { label: 'Quản lý phòng', path: '/admin/room-units', icon: DoorOpen        },
   { label: 'Khách hàng',    path: '/admin/users',      icon: Users           },
   { label: 'Đặt phòng',     path: '/admin/bookings',   icon: CalendarCheck   },
+  { label: 'Hóa đơn',       path: '/admin/invoices',   icon: FileText        },
   { label: 'Đánh giá',      path: '/admin/reviews',    icon: Star            },
   { label: 'Cài đặt',       path: '/admin/settings',   icon: Settings        },
 ];

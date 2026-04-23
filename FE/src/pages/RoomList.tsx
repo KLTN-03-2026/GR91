@@ -279,7 +279,8 @@ function UnitCard({ unit }: { unit: ApiRoomUnit }) {
       {/* Image */}
       <div className="md:w-2/5 h-56 md:h-auto relative shrink-0">
         <img src={img} alt={`Phòng ${unit.room_number}`}
-          className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          className="w-full h-full object-cover" referrerPolicy="no-referrer"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).src = FALLBACK_IMG; }} />
         <div className="absolute top-3 left-3 flex gap-1.5">
           <span className="bg-white/90 backdrop-blur-sm px-2.5 py-1 rounded-full text-xs font-semibold text-gray-800">
             Tầng {unit.floor}

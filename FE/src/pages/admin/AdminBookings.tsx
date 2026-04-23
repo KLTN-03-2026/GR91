@@ -53,20 +53,29 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
   if (h >= 15 && h < 18) return Math.round(basePerNight * 0.5);
   if (h >= 18)           return Math.round(basePerNight * 1.0);
   return 0;
-}export const AdminBookings: React.FC = () => {
+}
+
+export const AdminBookings: React.FC = () => {
   const [bookings, setBookings] = useState<ApiBooking[]>([]);
+  const [dailyPlan, setDailyPlan] = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
-  const [tab, setTab]           = useState<StatusKey | 'ALL'>('ALL');
+  const [tab, setTab]           = useState<StatusKey | 'ALL' | 'DAILY'>('ALL');
   const [search, setSearch]     = useState('');
   const [query, setQuery]       = useState<ListQuery>({});
   const [selected, setSelected] = useState<ApiBooking | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [checkoutResult, setCheckoutResult] = useState<any | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setBookings(await bookingApi.list(query));
+      const [all, daily] = await Promise.all([
+        bookingApi.list(query),
+        bookingApi.getDailyPlan().catch(() => []),
+      ]);
+      setBookings(all);
+      setDailyPlan(daily);
     } catch (e: any) {
       console.error(e.message);
     } finally { setLoading(false); }
@@ -236,8 +245,9 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
     a.click();
   };
 
-  const filtered = bookings
-    .filter((b) => tab === 'ALL' || b.status === tab)
+  const displayList = tab === 'DAILY' ? dailyPlan : bookings.filter((b) => tab === 'ALL' || b.status === tab);
+
+  const filtered = displayList
     .filter((b) =>
       (b.full_name ?? '').toLowerCase().includes(search.toLowerCase()) ||
       String(b.booking_id).includes(search) ||
@@ -318,7 +328,8 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
                 <th className="px-5 py-3">Check-in / out</th>
                 <th className="px-5 py-3">Trạng thái</th>
                 <th className="px-5 py-3">Tổng tiền</th>
-                <th className="px-5 py-3 text-right">Thao tác</th>
+                <th className="px-5 py-3">Thao tác nhanh</th>
+                <th className="px-5 py-3 text-right">Chi tiết</th>
               </tr>
             </thead>
             <tbody>
@@ -347,14 +358,26 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
                   <td className="px-5 py-4"><StatusBadge status={b.status} /></td>
                   <td className="px-5 py-4 text-sm font-bold text-gray-900">{formatVND(b.total_price)}</td>
                   <td className="px-5 py-4">
-                    <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-2">
+                      {b.status === 'CONFIRMED' && b.room_status !== 'MAINTENANCE' && (
+                        <button onClick={() => handleAdminCheckIn(b.booking_id)}
+                          className="px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-bold hover:bg-green-100 transition-colors">
+                          Nhận phòng
+                        </button>
+                      )}
+                      {b.status === 'CONFIRMED' && b.room_status === 'MAINTENANCE' && (
+                        <button onClick={() => handleAdminCheckOut(b.booking_id)}
+                          className="px-3 py-1.5 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg text-xs font-bold hover:bg-orange-100 transition-colors">
+                          Trả phòng
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-1 justify-end">
                       <button onClick={() => openDetail(b.booking_id)}
-                        className="flex items-center gap-1 text-xs px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-white hover:border-blue-300 hover:text-blue-600 transition-colors">
-                        Chi tiết <ChevronRight className="h-3 w-3" />
-                      </button>
-                      <button onClick={() => handleDelete(b.booking_id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                        <Trash2 className="h-4 w-4" />
+                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                        <ChevronRight className="h-5 w-5" />
                       </button>
                     </div>
                   </td>
@@ -583,6 +606,37 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
               </>
             )}
           </div>
+        </div>
+      )}
+      {/* Check-out Result Modal */}
+      {checkoutResult && (
+        <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
+          <Card className="max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3 text-green-600 border-b border-gray-100 pb-4">
+              <div className="w-10 h-10 bg-green-50 rounded-full flex items-center justify-center">
+                <Check className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Trả phòng thành công</h3>
+                <p className="text-xs text-gray-500">Phòng đã được chuyển sang trạng thái chờ dọn dẹp</p>
+              </div>
+            </div>
+            
+            <div className="space-y-3 py-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Phụ phí phát sinh:</span>
+                <span className="font-bold text-blue-600">+{formatVND(checkoutResult.extraFee)}</span>
+              </div>
+              <p className="text-[10px] text-gray-400 italic text-right">{checkoutResult.description}</p>
+              
+              <div className="flex justify-between text-lg font-black border-t border-dashed border-gray-200 pt-3 mt-1">
+                <span className="text-gray-900">TỔNG THANH TOÁN:</span>
+                <span className="text-blue-700">{formatVND(checkoutResult.totalFinal)}</span>
+              </div>
+            </div>
+
+            <Button fullWidth variant="primary" onClick={() => setCheckoutResult(null)}>Xác nhận & Đóng</Button>
+          </Card>
         </div>
       )}
     </>

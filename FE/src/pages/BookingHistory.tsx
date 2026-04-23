@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Loader2, Star, X, MessageSquare, AlertCircle, CheckCircle2, Pencil } from 'lucide-react';
 import { ProfileSidebar } from '../components/layout/ProfileSidebar';
 import { BookingCard } from '../components/features/BookingCard';
@@ -6,11 +7,12 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { bookingApi, reviewApi, type ApiBooking, type MyReview } from '../lib/api';
 
-type StatusFilter = 'all' | 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+type StatusFilter = 'all' | 'PENDING' | 'PARTIALLY_PAID' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
 
 const STATUS_TABS: { label: string; value: StatusFilter }[] = [
   { label: 'Tất cả',      value: 'all'       },
   { label: 'Chờ xử lý',   value: 'PENDING'   },
+  { label: 'Đã cọc',      value: 'PARTIALLY_PAID' },
   { label: 'Đã xác nhận', value: 'CONFIRMED' },
   { label: 'Hoàn thành',  value: 'COMPLETED' },
   { label: 'Đã hủy',      value: 'CANCELLED' },
@@ -194,6 +196,7 @@ export const BookingHistory: React.FC = () => {
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState('');
   const [activeTab,  setActiveTab]  = useState<StatusFilter>('all');
+  const location = useLocation();
 
   // Map bookingId → MyReview (từ DB)
   const [myReviews, setMyReviews] = useState<Map<number, MyReview>>(new Map());
@@ -220,6 +223,14 @@ export const BookingHistory: React.FC = () => {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reload khi navigate về từ trang thanh toán (kể cả khi component đã mount sẵn)
+  useEffect(() => {
+    if (!(location.state as any)?.refresh) return;
+    // Delay 800ms để đảm bảo BE đã commit transaction xong
+    const t = setTimeout(() => load(), 800);
+    return () => clearTimeout(t);
+  }, [location.key]);
 
   const handleCancel = async (id: number) => {
     if (!window.confirm('Bạn có chắc muốn hủy đặt phòng này?')) return;
@@ -265,7 +276,28 @@ export const BookingHistory: React.FC = () => {
 
           <div className="flex-1 min-w-0">
             <Card>
-              <h1 className="text-xl font-bold text-gray-900 mb-6">Lịch sử đặt phòng</h1>
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                <h1 className="text-xl font-bold text-gray-900">Lịch sử đặt phòng</h1>
+                
+                {bookings.length > 0 && bookings.some(b => Number(b.remaining_amount ?? 0) > 0 && b.status !== 'CANCELLED') && (
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl px-5 py-3 flex items-center gap-4">
+                    <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-200">
+                      <AlertCircle className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-blue-600 font-bold uppercase tracking-wider">Tổng tiền cần thanh toán</p>
+                      <p className="text-xl font-black text-blue-700">
+                        {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(
+                          bookings.reduce((sum, b) => {
+                            if (b.status === 'CANCELLED') return sum;
+                            return sum + Number(b.remaining_amount ?? 0);
+                          }, 0)
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-xl w-fit flex-wrap">
                 {STATUS_TABS.map(({ label, value }) => (
@@ -295,6 +327,7 @@ export const BookingHistory: React.FC = () => {
                       booking={booking}
                       onCancel={handleCancel}
                       onReview={handleOpenReview}
+                      onRefresh={load}
                       existingReview={myReviews.get(booking.booking_id)}
                     />
                   ))}

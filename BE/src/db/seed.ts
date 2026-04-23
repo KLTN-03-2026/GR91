@@ -11,9 +11,13 @@ async function seed() {
     // hotel_info
     await conn.execute(`
       INSERT IGNORE INTO hotel_info (id, name, address, phone, email, description) VALUES
-      (1, 'Sunrise Smart Hotel', '123 Nguyễn Huệ, Quận 1, TP.HCM',
-       '0909999999', 'contact@sunrisehotel.com',
+      (1, 'Sunrise Smart Hotel', 'TP ĐÀ NẴNG',
+       '0774423506', 'nhieu1652004@gmail.com',
        'Khách sạn tích hợp AI đầu tiên tại Việt Nam.')
+      ON DUPLICATE KEY UPDATE 
+        address = VALUES(address),
+        phone = VALUES(phone),
+        email = VALUES(email)
     `);
 
     // room_types

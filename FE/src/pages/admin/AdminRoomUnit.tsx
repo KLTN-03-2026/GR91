@@ -1,16 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ChevronLeft, Loader2, Save, Plus, Trash2, X,
   Image as ImageIcon, BedDouble, CalendarCheck, Settings2,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, TrendingUp, RotateCcw, DollarSign,
+  Info,
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
-import { adminRoomApi, roomApi, type ApiRoom, type BedType, type RoomCategory } from '../../lib/api';
+import {
+  adminRoomApi, roomApi,
+  type ApiRoom, type BedType, type RoomCategory, type PriceRangeDay,
+} from '../../lib/api';
 import { formatVND } from '../../lib/utils';
 import { useToast } from '../../components/ui/Toast';
+
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const STATUS_OPTIONS = [
   { value: 'ACTIVE',      label: 'Hoạt động',       cls: 'text-green-700 bg-green-50 border-green-200',    dot: 'bg-green-400'  },
@@ -26,6 +32,8 @@ const BOOKING_STATUS: Record<string, { label: string; variant: 'green' | 'yellow
   CANCELLED: { label: 'Đã hủy',      variant: 'red' },
 };
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 interface RoomImage { image_id: number; url: string; }
 interface Booking {
   booking_id: number; status: string; created_at: string;
@@ -40,9 +48,294 @@ interface RoomDetail {
   beds: { name: string; quantity: number }[];
 }
 
-type Tab = 'info' | 'images' | 'bookings';
+type Tab = 'info' | 'pricing' | 'images' | 'bookings';
 
 const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white';
+
+// ─── Helper: nguồn giá ───────────────────────────────────────────────────────
+
+function PriceSourceBadge({ row }: { row: PriceRangeDay }) {
+  if (row.room_price != null)
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-orange-50 text-orange-700 border border-orange-200">
+        <DollarSign className="h-2.5 w-2.5" /> Room
+      </span>
+    );
+  if (row.type_price != null)
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200">
+        <TrendingUp className="h-2.5 w-2.5" /> Type
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-gray-100 text-gray-500 border border-gray-200">
+      Base
+    </span>
+  );
+}
+
+// ─── Pricing Legend ──────────────────────────────────────────────────────────
+
+function PricingLegend() {
+  return (
+    <div className="flex flex-wrap gap-3 text-xs text-gray-500">
+      <span className="flex items-center gap-1">
+        <span className="w-2.5 h-2.5 rounded-sm bg-gray-100 border border-gray-200 inline-block" />
+        Base = giá gốc loại phòng
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="w-2.5 h-2.5 rounded-sm bg-purple-50 border border-purple-200 inline-block" />
+        Type = override theo loại phòng
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="w-2.5 h-2.5 rounded-sm bg-orange-50 border border-orange-200 inline-block" />
+        Room = override riêng phòng này
+      </span>
+    </div>
+  );
+}
+
+// ─── Pricing Tab ─────────────────────────────────────────────────────────────
+
+interface PricingTabProps {
+  roomId: number;
+  basePrice: number;
+}
+
+function PricingTab({ roomId, basePrice }: PricingTabProps) {
+  const toast = useToast();
+  const today = new Date().toISOString().split('T')[0];
+  const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+
+  /* ── State: date range viewer ── */
+  const [viewFrom, setViewFrom] = useState(today);
+  const [viewTo,   setViewTo]   = useState(nextWeek);
+  const [priceData, setPriceData]     = useState<PriceRangeDay[]>([]);
+  const [subtotal,  setSubtotal]      = useState(0);
+  const [loadingRange, setLoadingRange] = useState(false);
+  const [rangeError,   setRangeError]   = useState('');
+
+  /* ── State: set price form ── */
+  const [setFrom, setSetFrom]   = useState(today);
+  const [setTo,   setSetTo]     = useState(today);
+  const [setPrice, setSetPrice] = useState('');
+  const [setSaving, setSetSaving] = useState(false);
+
+  /* ── State: reset price form ── */
+  const [resetFrom, setResetFrom] = useState(today);
+  const [resetTo,   setResetTo]   = useState(today);
+  const [resetSaving, setResetSaving] = useState(false);
+
+  /* ── Load price range ── */
+  const loadRange = useCallback(async () => {
+    if (!viewFrom || !viewTo || viewFrom >= viewTo) {
+      setRangeError('Ngày bắt đầu phải trước ngày kết thúc');
+      return;
+    }
+    setLoadingRange(true);
+    setRangeError('');
+    try {
+      const res = await adminRoomApi.getPriceRange(roomId, viewFrom, viewTo);
+      setPriceData(res.data);
+      setSubtotal(res.subtotal);
+    } catch (e: any) {
+      setRangeError(e.message ?? 'Không thể tải dữ liệu giá');
+    } finally { setLoadingRange(false); }
+  }, [roomId, viewFrom, viewTo]);
+
+  useEffect(() => { loadRange(); }, [loadRange]);
+
+  /* ── Set price handler ── */
+  const handleSetPrice = async () => {
+    const val = Number(setPrice);
+    if (!val || val <= 0) { toast('Giá phải lớn hơn 0', 'error'); return; }
+    if (!setFrom || !setTo || setFrom > setTo) { toast('Khoảng ngày không hợp lệ', 'error'); return; }
+    setSetSaving(true);
+    try {
+      const res = await adminRoomApi.setPrice(roomId, { price: val, start_date: setFrom, end_date: setTo });
+      toast(`Đã đặt giá ${formatVND(val)} cho ${res.updated} ngày`);
+      // Sync lại bảng xem nếu range trùng nhau
+      if (setFrom <= viewTo && setTo >= viewFrom) loadRange();
+    } catch (e: any) {
+      toast(e.message ?? 'Cập nhật giá thất bại', 'error');
+    } finally { setSetSaving(false); }
+  };
+
+  /* ── Reset price handler ── */
+  const handleResetPrice = async () => {
+    if (!confirm(`Xóa giá override từ ${resetFrom} đến ${resetTo}? Phòng sẽ dùng lại giá loại hoặc giá gốc.`)) return;
+    setResetSaving(true);
+    try {
+      await adminRoomApi.resetPrice(roomId, { start_date: resetFrom, end_date: resetTo });
+      toast(`Đã xóa giá override từ ${resetFrom} đến ${resetTo}`);
+      if (resetFrom <= viewTo && resetTo >= viewFrom) loadRange();
+    } catch (e: any) {
+      toast(e.message ?? 'Reset giá thất bại', 'error');
+    } finally { setResetSaving(false); }
+  };
+
+  const nights = priceData.length;
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── (A) Bảng giá theo ngày ── */}
+      <Card>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <div>
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-blue-500" />
+              Bảng giá theo ngày
+            </h2>
+            <p className="text-xs text-gray-400 mt-0.5">Xem giá 3 tầng: Base → Type override → Room override</p>
+          </div>
+          {/* Date range picker */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <input type="date" value={viewFrom} onChange={(e) => setViewFrom(e.target.value)}
+              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <span className="text-gray-400 text-sm">→</span>
+            <input type="date" value={viewTo} onChange={(e) => setViewTo(e.target.value)}
+              className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <button onClick={loadRange} disabled={loadingRange}
+              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5">
+              {loadingRange ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Xem
+            </button>
+          </div>
+        </div>
+
+        <PricingLegend />
+
+        {rangeError && (
+          <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {rangeError}
+          </div>
+        )}
+
+        {loadingRange ? (
+          <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-gray-300" /></div>
+        ) : priceData.length === 0 ? (
+          <p className="text-center text-sm text-gray-400 py-8">Chọn khoảng ngày để xem bảng giá</p>
+        ) : (
+          <>
+            <div className="mt-4 overflow-x-auto rounded-xl border border-gray-100">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 font-medium">Ngày</th>
+                    <th className="px-4 py-3 font-medium">Base</th>
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Room</th>
+                    <th className="px-4 py-3 font-medium text-right">Giá hiệu lực</th>
+                    <th className="px-4 py-3 font-medium">Nguồn</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {priceData.map((row) => (
+                    <tr key={row.date}
+                      className={`hover:bg-gray-50 ${row.room_price != null ? 'bg-orange-50/30' : row.type_price != null ? 'bg-purple-50/20' : ''}`}>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-700">
+                        {new Date(row.date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' })}
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-500">{formatVND(row.base_price)}</td>
+                      <td className="px-4 py-2.5">
+                        {row.type_price != null
+                          ? <span className="text-purple-700 font-medium">{formatVND(row.type_price)}</span>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {row.room_price != null
+                          ? <span className="text-orange-700 font-medium">{formatVND(row.room_price)}</span>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-bold text-gray-900">{formatVND(row.final_price)}</td>
+                      <td className="px-4 py-2.5"><PriceSourceBadge row={row} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* (D) Preview subtotal */}
+            <div className="mt-4 flex items-center justify-between bg-blue-50 rounded-xl px-5 py-3 border border-blue-100">
+              <div className="flex items-center gap-2 text-sm text-blue-700">
+                <Info className="h-4 w-4" />
+                <span>Tổng {nights} đêm</span>
+              </div>
+              <span className="text-lg font-bold text-blue-700">{formatVND(subtotal)}</span>
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* ── (B) Form đặt giá ── */}
+      <Card>
+        <h2 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+          <DollarSign className="h-4 w-4 text-orange-500" />
+          Đặt giá override
+        </h2>
+        <p className="text-xs text-gray-400 mb-5">
+          Ghi đè giá riêng cho phòng này trong khoảng ngày. Ưu tiên cao nhất, hiển thị là <strong>Room</strong>.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Từ ngày</label>
+            <input type="date" value={setFrom} onChange={(e) => setSetFrom(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Đến ngày</label>
+            <input type="date" value={setTo} min={setFrom} onChange={(e) => setSetTo(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Giá / đêm (VNĐ)</label>
+            <input type="number" min={0} value={setPrice} onChange={(e) => setSetPrice(e.target.value)}
+              placeholder={`${basePrice.toLocaleString()}`} className={inputCls} />
+          </div>
+        </div>
+        {setFrom && setTo && setFrom <= setTo && (
+          <p className="text-xs text-gray-400 mt-2">
+            Áp dụng cho {Math.round((new Date(setTo).getTime() - new Date(setFrom).getTime()) / 86400000) + 1} ngày
+          </p>
+        )}
+        <div className="flex justify-end mt-4">
+          <Button onClick={handleSetPrice} disabled={setSaving}>
+            {setSaving ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <CheckCircle2 className="h-4 w-4 mr-1.5" />}
+            {setSaving ? 'Đang lưu...' : 'Đặt giá'}
+          </Button>
+        </div>
+      </Card>
+
+      {/* ── (C) Form reset giá ── */}
+      <Card>
+        <h2 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+          <RotateCcw className="h-4 w-4 text-gray-500" />
+          Xóa giá override
+        </h2>
+        <p className="text-xs text-gray-400 mb-5">
+          Xóa giá override của phòng trong khoảng ngày. Phòng sẽ tự động dùng lại <strong>Type override</strong> (nếu có) hoặc <strong>Base price</strong>.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Từ ngày</label>
+            <input type="date" value={resetFrom} onChange={(e) => setResetFrom(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Đến ngày</label>
+            <input type="date" value={resetTo} min={resetFrom} onChange={(e) => setResetTo(e.target.value)} className={inputCls} />
+          </div>
+        </div>
+        <div className="flex justify-end mt-4">
+          <Button variant="secondary" onClick={handleResetPrice} disabled={resetSaving}>
+            {resetSaving ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RotateCcw className="h-4 w-4 mr-1.5" />}
+            {resetSaving ? 'Đang xóa...' : 'Xóa giá override'}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export const AdminRoomUnit: React.FC = () => {
   const { typeId, roomId } = useParams<{ typeId: string; roomId: string }>();
@@ -57,10 +350,10 @@ export const AdminRoomUnit: React.FC = () => {
   const [form, setForm]     = useState({ room_number: '', floor: '1', status: 'ACTIVE', room_note: '' });
   const [saving, setSaving] = useState(false);
 
-  const [roomTypes, setRoomTypes]               = useState<ApiRoom[]>([]);
-  const [bedTypes, setBedTypes]                 = useState<BedType[]>([]);
-  const [selectedTypeId, setSelectedTypeId]     = useState('');
-  const [typeChanging, setTypeChanging]         = useState(false);
+  const [roomTypes, setRoomTypes]           = useState<ApiRoom[]>([]);
+  const [bedTypes, setBedTypes]             = useState<BedType[]>([]);
+  const [selectedTypeId, setSelectedTypeId] = useState('');
+  const [typeChanging, setTypeChanging]     = useState(false);
 
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickForm, setQuickForm] = useState({
@@ -103,7 +396,6 @@ export const AdminRoomUnit: React.FC = () => {
 
   const previewType = roomTypes.find((t) => String(t.type_id) === selectedTypeId);
 
-  // Auto-generate tên từ hạng + loại giường
   useEffect(() => {
     if (!quickAutoName) return;
     const catName = categories.find((c) => String(c.category_id) === quickForm.category_id)?.name ?? '';
@@ -224,14 +516,16 @@ export const AdminRoomUnit: React.FC = () => {
         </Link>
       </div>
 
-      <div className="flex gap-1 mb-6 border-b border-gray-200">
+      {/* ── Tabs ── */}
+      <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
         {([
           { key: 'info',     label: 'Thông tin',  icon: BedDouble },
+          { key: 'pricing',  label: 'Định giá',   icon: TrendingUp },
           { key: 'images',   label: `Ảnh (${images.length})`, icon: ImageIcon },
           { key: 'bookings', label: `Lịch sử đặt (${bookings.length})`, icon: CalendarCheck },
         ] as { key: Tab; label: string; icon: any }[]).map(({ key, label, icon: Icon }) => (
           <button key={key} onClick={() => setTab(key)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
               tab === key ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:text-gray-700'
             }`}>
             <Icon className="h-4 w-4" /> {label}
@@ -308,7 +602,6 @@ export const AdminRoomUnit: React.FC = () => {
                 </select>
               </div>
 
-              {/* Preview thông tin loại được chọn (read-only) */}
               {previewType && (
                 <div className="bg-gray-50 rounded-xl p-4 space-y-3 mb-4">
                   <div className="grid grid-cols-2 gap-3">
@@ -353,7 +646,6 @@ export const AdminRoomUnit: React.FC = () => {
               )}
             </Card>
 
-            {/* Quick-add new type panel */}
             {showQuickAdd && (
               <Card>
                 <div className="flex items-center gap-2 mb-3">
@@ -369,7 +661,6 @@ export const AdminRoomUnit: React.FC = () => {
                   </div>
                 )}
                 <div className="space-y-3">
-                  {/* 1. Hạng phòng */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Hạng phòng</label>
                     <select value={quickForm.category_id}
@@ -379,8 +670,6 @@ export const AdminRoomUnit: React.FC = () => {
                       {categories.map((c) => <option key={c.category_id} value={c.category_id}>{c.name}</option>)}
                     </select>
                   </div>
-
-                  {/* 2. Loại giường — chọn xong số lượng tự reset về 1 */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Loại giường</label>
                     <select value={quickForm.bed_id}
@@ -390,8 +679,6 @@ export const AdminRoomUnit: React.FC = () => {
                       {bedTypes.map((bt) => <option key={bt.bed_id} value={bt.bed_id}>{bt.name}</option>)}
                     </select>
                   </div>
-
-                  {/* Số lượng giường — chỉ hiện khi đã chọn loại */}
                   {quickForm.bed_id && (
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">Số lượng giường</label>
@@ -400,8 +687,6 @@ export const AdminRoomUnit: React.FC = () => {
                         className={inputCls} />
                     </div>
                   )}
-
-                  {/* 3. Tên — tự động từ hạng + giường */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1 flex items-center gap-1.5">
                       Tên loại phòng *
@@ -417,7 +702,6 @@ export const AdminRoomUnit: React.FC = () => {
                       </button>
                     )}
                   </div>
-
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">Giá / đêm (VNĐ) *</label>
@@ -432,7 +716,6 @@ export const AdminRoomUnit: React.FC = () => {
                         className={inputCls} />
                     </div>
                   </div>
-
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Diện tích (m²)</label>
                     <input type="number" min={1} value={quickForm.area_sqm}
@@ -442,7 +725,7 @@ export const AdminRoomUnit: React.FC = () => {
                   <div className="flex gap-2 pt-1">
                     <Button fullWidth onClick={handleQuickAdd} disabled={quickSaving}>
                       {quickSaving ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Plus className="h-4 w-4 mr-1.5" />}
-                      Tạo & Gán cho phòng này
+                      Tạo &amp; Gán cho phòng này
                     </Button>
                     <button onClick={() => setShowQuickAdd(false)}
                       className="px-3 py-2 border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-50 transition-colors">
@@ -454,6 +737,11 @@ export const AdminRoomUnit: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Tab: Định giá ── */}
+      {tab === 'pricing' && (
+        <PricingTab roomId={detail.room_id} basePrice={detail.base_price} />
       )}
 
       {/* ── Tab: Images ── */}

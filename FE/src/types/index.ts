@@ -4,6 +4,7 @@ export type UserRole = 'user' | 'admin';
 
 export interface Room {
   id: string;
+  room_id?: number | null;
   name: string;
   type: RoomType;
   price: number;

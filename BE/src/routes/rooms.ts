@@ -8,6 +8,56 @@ export const roomRouter = Router();
 const h = (fn: (req: any, res: Response, next: NextFunction) => Promise<any>) =>
   (req: any, res: Response, next: NextFunction) => fn(req, res, next).catch(next);
 
+function formatDateOnly(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().split('T')[0];
+  return String(value).split('T')[0];
+}
+
+function buildUnavailableRanges(rows: Array<{ date: string; status: string }>) {
+  const blocked = rows
+    .filter((row) => ['BOOKED', 'PENDING', 'BLOCKED'].includes(row.status))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const ranges: Array<{ check_in: string; check_out: string; status: string }> = [];
+
+  for (const row of blocked) {
+    const last = ranges[ranges.length - 1];
+    if (!last || last.status !== row.status) {
+      ranges.push({
+        check_in: row.date,
+        check_out: row.date,
+        status: row.status,
+      });
+      continue;
+    }
+
+    const expectedNext = new Date(`${last.check_out}T00:00:00`);
+    expectedNext.setDate(expectedNext.getDate() + 1);
+    const nextDate = expectedNext.toISOString().split('T')[0];
+
+    if (nextDate === row.date) {
+      last.check_out = row.date;
+      continue;
+    }
+
+    ranges.push({
+      check_in: row.date,
+      check_out: row.date,
+      status: row.status,
+    });
+  }
+
+  return ranges.map((range) => {
+    const exclusive = new Date(`${range.check_out}T00:00:00`);
+    exclusive.setDate(exclusive.getDate() + 1);
+    return {
+      check_in: range.check_in,
+      check_out: exclusive.toISOString().split('T')[0],
+      status: range.status,
+    };
+  });
+}
+
 // ── STATIC / SPECIFIC paths first (must be before /:type_id) ─────────────────
 
 // PATCH /api/rooms/units/:room_id
@@ -146,50 +196,143 @@ roomRouter.patch('/units/:room_id/type', requireAuth, requireAdmin, async (req: 
   } finally { conn.release(); }
 });
 
-// GET /api/rooms/units/:room_id/price — giá hiện tại của phòng (override hoặc base_price)
-roomRouter.get('/units/:room_id/price', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+// GET /api/rooms/units/:room_id/price — giá hôm nay (3-tier: room_price > type_price > base)
+roomRouter.get('/units/:room_id/price', optionalAuth, async (req: AuthRequest, res: Response) => {
   const conn = await pool.getConnection();
   try {
-    // Lấy base_price từ room_types và override price từ room_prices (nếu có)
     const [rows] = await conn.execute(`
       SELECT rt.base_price,
-             rp.price AS override_price
+             rtp.price  AS type_price,
+             rp.price   AS room_price,
+             COALESCE(rp.price, rtp.price, rt.base_price) AS effective_price
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
-      LEFT JOIN room_prices rp ON rp.room_id = r.room_id AND rp.date = CURDATE()
+      LEFT JOIN room_type_prices rtp ON rtp.type_id = rt.type_id AND rtp.date = CURDATE()
+      LEFT JOIN room_prices rp       ON rp.room_id = r.room_id    AND rp.date = CURDATE()
       WHERE r.room_id = ?
     `, [req.params.room_id]) as any[];
     if (!rows[0]) return res.status(404).json({ error: 'Không tìm thấy phòng' });
     res.json({
-      base_price: rows[0].base_price,
-      override_price: rows[0].override_price ?? null,
-      effective_price: rows[0].override_price ?? rows[0].base_price,
+      base_price:      rows[0].base_price,
+      type_price:      rows[0].type_price  ?? null,
+      room_price:      rows[0].room_price  ?? null,
+      effective_price: rows[0].effective_price,
     });
   } finally { conn.release(); }
 });
 
-// PUT /api/rooms/units/:room_id/price — đặt giá override cho phòng
-roomRouter.put('/units/:room_id/price', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  const { price, date } = req.body;
-  if (!price || isNaN(Number(price))) return res.status(400).json({ error: 'Giá không hợp lệ' });
-  const targetDate = date ?? new Date().toISOString().split('T')[0];
+// GET /api/rooms/units/:room_id/price-range?check_in=&check_out=
+// Trả về bảng giá từng ngày (3-tier) trong khoảng - SINGLE JOIN, không loop
+roomRouter.get('/units/:room_id/price-range', optionalAuth, async (req: AuthRequest, res: Response) => {
+  const { check_in, check_out } = req.query as Record<string, string>;
+  if (!check_in || !check_out)
+    return res.status(400).json({ error: 'Thiếu check_in hoặc check_out' });
+  if (new Date(check_in) >= new Date(check_out))
+    return res.status(400).json({ error: 'check_in phải trước check_out' });
+
   const conn = await pool.getConnection();
   try {
-    await conn.execute(
-      `INSERT INTO room_prices (room_id, date, price)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE price = VALUES(price)`,
-      [req.params.room_id, targetDate, Number(price)]
-    );
-    res.json({ success: true });
+    // Sinh dãy ngày trong date range bằng subquery (không cần bảng phụ)
+    // Dùng recursive CTE để sinh từng ngày từ check_in đến check_out (exclusive)
+    const [rows] = await conn.execute(`
+      WITH RECURSIVE date_range AS (
+        SELECT DATE(?) AS d
+        UNION ALL
+        SELECT DATE_ADD(d, INTERVAL 1 DAY)
+        FROM date_range
+        WHERE DATE_ADD(d, INTERVAL 1 DAY) < DATE(?)
+      )
+      SELECT
+        dr.d                                                 AS date,
+        rt.base_price,
+        rtp.price                                            AS type_price,
+        rp.price                                             AS room_price,
+        COALESCE(rp.price, rtp.price, rt.base_price)        AS final_price
+      FROM date_range dr
+      CROSS JOIN rooms r ON r.room_id = ?
+      JOIN  room_types rt              ON rt.type_id  = r.type_id
+      LEFT JOIN room_type_prices rtp   ON rtp.type_id = rt.type_id AND rtp.date = dr.d
+      LEFT JOIN room_prices rp         ON rp.room_id = r.room_id        AND rp.date  = dr.d
+      ORDER BY dr.d
+    `, [check_in, check_out, req.params.room_id]) as any[];
+
+    const data = (rows as any[]).map((r: any) => ({
+      date:        r.date instanceof Date ? r.date.toISOString().split('T')[0] : String(r.date).split('T')[0],
+      base_price:  Number(r.base_price),
+      type_price:  r.type_price  != null ? Number(r.type_price)  : null,
+      room_price:  r.room_price  != null ? Number(r.room_price)  : null,
+      final_price: Number(r.final_price),
+    }));
+
+    const subtotal = data.reduce((s: number, d: any) => s + d.final_price, 0);
+    res.json({ data, subtotal });
   } finally { conn.release(); }
 });
 
-// DELETE /api/rooms/units/:room_id/price — xóa giá override (về lại base_price)
-roomRouter.delete('/units/:room_id/price', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+// PUT /api/rooms/units/:room_id/price — đặt giá override theo date range (batch upsert)
+roomRouter.put('/units/:room_id/price', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const { price, start_date, end_date, date } = req.body;
+  if (!price || isNaN(Number(price))) return res.status(400).json({ error: 'Giá không hợp lệ' });
+  const priceVal = Number(price);
+  const roomId   = Number(req.params.room_id);
   const conn = await pool.getConnection();
   try {
-    await conn.execute('DELETE FROM room_prices WHERE room_id = ?', [req.params.room_id]);
+    // Legacy: nếu chỉ truyền `date` đơn lẻ
+    if (date && !start_date) {
+      await conn.execute(
+        `INSERT INTO room_prices (room_id, date, price) VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE price = VALUES(price)`,
+        [roomId, date, priceVal]
+      );
+      return res.json({ success: true, updated: 1 });
+    }
+
+    const from = start_date ?? new Date().toISOString().split('T')[0];
+    const to   = end_date   ?? from;
+    if (new Date(from) > new Date(to))
+      return res.status(400).json({ error: 'start_date phải ≤ end_date' });
+
+    // Tạo danh sách ngày phía server (tránh CTE để tương thích MySQL 5.x cũ)
+    const days: string[] = [];
+    const cur = new Date(from);
+    const last = new Date(to);
+    while (cur <= last) {
+      days.push(cur.toISOString().split('T')[0]);
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    if (!days.length) return res.json({ success: true, updated: 0 });
+
+    // Batch INSERT ... ON DUPLICATE KEY UPDATE
+    const placeholders = days.map(() => '(?,?,?)').join(',');
+    const vals: any[] = [];
+    days.forEach((d) => vals.push(roomId, d, priceVal));
+
+    await conn.execute(
+      `INSERT INTO room_prices (room_id, date, price) VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE price = VALUES(price)`,
+      vals
+    );
+    res.json({ success: true, updated: days.length });
+  } finally { conn.release(); }
+});
+
+// DELETE /api/rooms/units/:room_id/price — xóa giá override theo date range
+roomRouter.delete('/units/:room_id/price', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const { start_date, end_date } = req.body ?? {};
+  const roomId = Number(req.params.room_id);
+  const conn = await pool.getConnection();
+  try {
+    if (start_date && end_date) {
+      // Xóa chỉ trong range
+      await conn.execute(
+        'DELETE FROM room_prices WHERE room_id = ? AND date BETWEEN ? AND ?',
+        [roomId, start_date, end_date]
+      );
+    } else {
+      // Legacy: xóa tất cả override của phòng
+      await conn.execute('DELETE FROM room_prices WHERE room_id = ?', [roomId]);
+    }
     res.json({ success: true });
   } finally { conn.release(); }
 });
@@ -315,7 +458,13 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
           WHEN b.status = 'COMPLETED'
             AND DATE(br.check_out) = ?
           THEN 1 ELSE 0
-        END) AS is_cleaning
+        END) AS is_cleaning,
+        -- Thông tin booking hiện tại (active)
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in  END) AS booking_check_in,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out END) AS booking_check_out,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in_time  END) AS booking_check_in_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out_time END) AS booking_check_out_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN b.booking_id END) AS active_booking_id
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
       LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = ?
@@ -327,7 +476,9 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
                rt.type_id, rt.name, rt.base_price
       ORDER BY r.floor ASC, r.room_number ASC
-    `, [date, date, date, date]) as any[];
+    `, [date, date, date,
+        date, date, date, date, date, date, date, date, date, date,
+        date]) as any[];
 
     res.json(rows.map((r: any) => {
       let display_status: string;
@@ -343,96 +494,151 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
         display_status = 'AVAILABLE';
       }
       return {
-        room_id:        r.room_id,
-        room_number:    r.room_number,
-        floor:          r.floor,
-        db_status:      r.db_status,
+        room_id:          r.room_id,
+        room_number:      r.room_number,
+        floor:            r.floor,
+        db_status:        r.db_status,
         display_status,
-        room_note:      r.room_note ?? null,
-        type_id:        r.type_id,
-        type_name:      r.type_name,
-        base_price:     r.base_price,
-        effective_price: r.effective_price,
-        first_image:    r.first_image ?? null,
+        room_note:        r.room_note ?? null,
+        type_id:          r.type_id,
+        type_name:        r.type_name,
+        base_price:       r.base_price,
+        effective_price:  r.effective_price,
+        first_image:      r.first_image ?? null,
         beds: r.beds ? r.beds.split(',').map((b: string) => {
           const [name, qty] = b.split(':');
           return { name, quantity: Number(qty) };
         }) : [],
+        // Booking hiện tại (nếu đang có khách)
+        booking: display_status === 'BOOKED' ? {
+          booking_id:      r.active_booking_id ?? null,
+          check_in:        r.booking_check_in   ? r.booking_check_in.toISOString().split('T')[0]  : null,
+          check_out:       r.booking_check_out  ? r.booking_check_out.toISOString().split('T')[0] : null,
+          check_in_time:   r.booking_check_in_time  ?? '14:00',
+          check_out_time:  r.booking_check_out_time ?? '11:00',
+        } : null,
       };
     }));
   } finally { conn.release(); }
 });
 
-// GET /api/rooms/physical/:room_id — Public access for physical room details 
+// GET /api/rooms/physical/:room_id — Public access for physical room details
 roomRouter.get('/physical/:room_id', h(async (req: AuthRequest, res: Response) => {
   const conn = await pool.getConnection();
   try {
+    // 1 query: lấy thông tin phòng + ảnh riêng của phòng
     const [rows] = await conn.execute(`
       SELECT r.room_id, r.room_number, r.floor, r.status, r.room_note,
              rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity, rt.description,
              rt.area_sqm, rc.name AS category_name,
              MAX(rp.price) AS override_price,
              GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
-             GROUP_CONCAT(DISTINCT a.name) as amenities
+             GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
+             (SELECT GROUP_CONCAT(url ORDER BY image_id SEPARATOR '|||')
+              FROM room_images WHERE room_id = r.room_id) AS own_images
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
-      LEFT JOIN room_categories rc  ON rt.category_id = rc.category_id
-      LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = CURDATE()
-      LEFT JOIN room_type_beds rtb  ON rt.type_id = rtb.type_id
-      LEFT JOIN bed_types bt        ON rtb.bed_id = bt.bed_id
+      LEFT JOIN room_categories rc      ON rt.category_id = rc.category_id
+      LEFT JOIN room_prices rp          ON rp.room_id = r.room_id AND rp.date = CURDATE()
+      LEFT JOIN room_type_beds rtb      ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt            ON rtb.bed_id = bt.bed_id
       LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
-      LEFT JOIN amenities a         ON rta.amenity_id = a.amenity_id
+      LEFT JOIN amenities a             ON rta.amenity_id = a.amenity_id
       WHERE r.room_id = ?
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
                rt.type_id, rt.name, rt.base_price, rt.capacity, rt.description, rt.area_sqm, rc.name
     `, [req.params.room_id]) as any[];
-    
+
     if (!rows[0]) return res.status(404).json({ error: 'Không tìm thấy phòng vật lý' });
     const r = rows[0];
 
-    // Fetch images: priority room_images, fallback room_types
-    const [images] = await conn.execute(
-      'SELECT url FROM room_images WHERE room_id = ? ORDER BY image_id',
-      [req.params.room_id]
-    ) as any[];
-    
-    // If not enough images, fetch images from other rooms of same type
-    let finalImages = images.map((img: any) => img.url);
-    if (finalImages.length < 5) {
-      const limitVal = 10 - finalImages.length;
-      const [typeImages] = await conn.execute(
-        `SELECT ri.url FROM room_images ri JOIN rooms ro ON ri.room_id = ro.room_id WHERE ro.type_id = ? AND ri.room_id != ? LIMIT ${limitVal}`,
-        [r.type_id, r.room_id]
-      ) as any[];
-      const uniqueExtras = typeImages.map((img: any) => img.url).filter((url: string) => !finalImages.includes(url));
-      finalImages = [...finalImages, ...uniqueExtras];
-    }
+    // Chỉ dùng ảnh riêng của phòng, không fallback sang phòng khác
+    const finalImages: string[] = r.own_images
+      ? r.own_images.split('|||').filter(Boolean)
+      : [];
 
     res.json({
-      ...r,
-      override_price: r.override_price ?? null,
-      effective_price: r.override_price ?? r.base_price,
+      room_id:             r.room_id,
+      room_number:         r.room_number,
+      floor:               r.floor,
+      status:              r.status,
+      room_note:           r.room_note ?? null,
+      type_id:             r.type_id,
+      type_name:           r.type_name,
+      base_price:          r.base_price,
+      capacity:            r.capacity,
+      description:         r.description ?? '',
+      area_sqm:            r.area_sqm ?? null,
+      category_name:       r.category_name ?? null,
+      override_price:      r.override_price ?? null,
+      effective_price:     r.override_price ?? r.base_price,
+      availability_status: r.status,
       beds: r.beds ? r.beds.split(',').map((b: string) => {
         const [name, qty] = b.split(':');
         return { name, quantity: Number(qty) };
       }) : [],
       amenities: r.amenities ? r.amenities.split(',') : [],
-      images: finalImages
+      images: finalImages,
+      image:  finalImages[0] ?? null,
     });
   } finally { conn.release(); }
 }));
 
-// GET /api/rooms/physical/:room_id/availability — Returns dates where room is unavailable
+// GET /api/rooms/physical/:room_id/availability — inventory calendar + grouped unavailable ranges
 roomRouter.get('/physical/:room_id/availability', h(async (req: AuthRequest, res: Response) => {
   const conn = await pool.getConnection();
   try {
-    const [rows] = await conn.execute(
-      'SELECT date FROM room_inventory WHERE room_id = ? AND status != \'AVAILABLE\' AND date >= CURDATE()',
+    const [roomRows] = await conn.execute(
+      'SELECT room_id FROM rooms WHERE room_id = ? LIMIT 1',
       [req.params.room_id]
     ) as any[];
-    res.json(rows.map((row: any) => row.date));
+
+    if (!(roomRows as any[]).length) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy phòng', code: 'ROOM_NOT_FOUND' });
+    }
+
+    // Kết hợp room_inventory (block tay/giá) và booking_rooms (đặt thực tế)
+    // Dùng CTE sinh 120 ngày tiếp theo để đảm bảo lịch luôn có dữ liệu đầy đủ
+    const [rows] = await conn.execute(`
+      WITH RECURSIVE days AS (
+        SELECT CURDATE() as d
+        UNION ALL
+        SELECT DATE_ADD(d, INTERVAL 1 DAY)
+        FROM days
+        WHERE d < DATE_ADD(CURDATE(), INTERVAL 120 DAY)
+      )
+      SELECT 
+        dr.d AS date,
+        CASE 
+          WHEN MAX(inv.status) IS NOT NULL AND MAX(inv.status) != 'AVAILABLE' THEN MAX(inv.status)
+          WHEN MAX(b.booking_id) IS NOT NULL THEN 
+            CASE 
+              WHEN MAX(b.status) = 'PENDING' THEN 'PENDING'
+              ELSE 'BOOKED'
+            END
+          ELSE 'AVAILABLE'
+        END AS status
+      FROM days dr
+      LEFT JOIN room_inventory inv ON inv.room_id = ? AND inv.date = dr.d
+      LEFT JOIN booking_rooms br   ON br.room_id = ? AND dr.d >= br.check_in AND dr.d < br.check_out
+      LEFT JOIN bookings b        ON b.booking_id = br.booking_id AND b.status NOT IN ('CANCELLED')
+      GROUP BY dr.d
+      ORDER BY dr.d ASC
+    `, [req.params.room_id, req.params.room_id]) as any[];
+
+
+    const data = (rows as any[]).map((row: any) => ({
+      date: formatDateOnly(row.date),
+      status: String(row.status ?? 'AVAILABLE'),
+    }));
+
+    res.json({
+      data,
+      booked_ranges: buildUnavailableRanges(data),
+    });
   } finally { conn.release(); }
 }));
+
 
 // GET /api/rooms/physical/:room_id/similar
 roomRouter.get('/physical/:room_id/similar', h(async (req: Request, res: Response) => {
@@ -454,11 +660,10 @@ roomRouter.get('/physical/:room_id/similar', h(async (req: Request, res: Respons
       SELECT r.room_id, r.room_number, r.floor, r.status, r.room_note,
              rt.name AS type_name, rt.base_price, rt.capacity, rt.area_sqm,
              MAX(rp.price) AS override_price,
-             MIN(ri.url) AS image
+             (SELECT url FROM room_images WHERE room_id = r.room_id ORDER BY image_id LIMIT 1) AS image
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
       LEFT JOIN room_prices rp ON rp.room_id = r.room_id AND rp.date = CURDATE()
-      LEFT JOIN room_images ri ON ri.room_id = r.room_id
       WHERE r.type_id = ? AND r.room_id != ? AND r.status = 'ACTIVE'
     `;
     const params: any[] = [type_id, room_id];
@@ -488,7 +693,8 @@ roomRouter.get('/physical/:room_id/similar', h(async (req: Request, res: Respons
     res.json(rows.map((r: any) => ({
       ...r,
       effective_price: r.override_price ?? r.base_price,
-      override_price: r.override_price ?? null
+      override_price:  r.override_price ?? null,
+      image:           r.image ?? null,
     })));
   } finally { conn.release(); }
 }));
@@ -504,6 +710,7 @@ roomRouter.get('/recommendations', optionalAuth, async (req: AuthRequest, res: R
         rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity, rt.description,
         GROUP_CONCAT(DISTINCT a.name) AS amenities,
         MIN(ri.url) AS image,
+        MIN(r.room_id) AS first_room_id,
         COALESCE((SELECT COUNT(*) FROM booking_rooms br JOIN rooms r ON br.room_id = r.room_id WHERE r.type_id = rt.type_id), 0) AS booking_count,
         COALESCE((SELECT ROUND(AVG(rating), 1) FROM reviews rv WHERE rv.room_type_id = rt.type_id AND rv.status = 'VISIBLE'), 0) AS rating
       FROM room_types rt
@@ -618,7 +825,7 @@ roomRouter.get('/available', async (req: Request, res: Response) => {
       (new Date(check_out as string).getTime() - new Date(check_in as string).getTime()) / 86400000
     ));
 
-    // Phòng có đủ ngày available trong room_inventory
+    // Phòng đủ inventory và không có ngày conflict trong range
     const [rows] = await conn.execute(`
       SELECT
         r.room_id, r.room_number, r.floor, r.status, r.room_note,
@@ -626,7 +833,9 @@ roomRouter.get('/available', async (req: Request, res: Response) => {
         rt.description, rt.area_sqm,
         rc.name AS category_name,
         COALESCE(SUM(inv.price), rt.base_price * ?) AS total_inventory_price,
-        COUNT(inv.inventory_id) AS available_days,
+        COUNT(inv.inventory_id) AS inventory_days,
+        SUM(CASE WHEN inv.status = 'AVAILABLE' THEN 1 ELSE 0 END) AS available_days,
+        SUM(CASE WHEN inv.status IN ('BOOKED', 'PENDING', 'BLOCKED') THEN 1 ELSE 0 END) AS conflict_days,
         GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
         GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
         MIN(ri.url) AS image
@@ -635,7 +844,6 @@ roomRouter.get('/available', async (req: Request, res: Response) => {
       LEFT JOIN room_categories rc      ON rt.category_id = rc.category_id
       LEFT JOIN room_inventory inv      ON inv.room_id = r.room_id
         AND inv.date >= ? AND inv.date < ?
-        AND inv.status = 'AVAILABLE'
       LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
       LEFT JOIN amenities a             ON rta.amenity_id = a.amenity_id
       LEFT JOIN room_type_beds rtb      ON rt.type_id = rtb.type_id
@@ -644,9 +852,9 @@ roomRouter.get('/available', async (req: Request, res: Response) => {
       WHERE r.status = 'ACTIVE'
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
                rt.type_id, rt.name, rt.base_price, rt.capacity, rt.description, rt.area_sqm, rc.name
-      HAVING available_days >= ?
+      HAVING inventory_days >= ? AND available_days >= ? AND conflict_days = 0
       ORDER BY rt.base_price ASC, r.floor ASC
-    `, [nights, check_in, check_out, nights]) as any[];
+    `, [nights, check_in, check_out, nights, nights]) as any[];
 
     res.json((rows as any[]).map((r: any) => ({
       room_id:              r.room_id,
@@ -702,7 +910,7 @@ roomRouter.get('/all-units', async (req: Request, res: Response) => {
              COALESCE(MAX(rp.price), rt.base_price) AS effective_price,
              GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
              GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
-             MIN(ri.url) AS image
+             (SELECT url FROM room_images WHERE room_id = r.room_id ORDER BY image_id LIMIT 1) AS image
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
       LEFT JOIN room_prices rp          ON rp.room_id = r.room_id AND rp.date = CURDATE()
@@ -710,7 +918,6 @@ roomRouter.get('/all-units', async (req: Request, res: Response) => {
       LEFT JOIN amenities a             ON rta.amenity_id = a.amenity_id
       LEFT JOIN room_type_beds rtb      ON rt.type_id = rtb.type_id
       LEFT JOIN bed_types bt            ON rtb.bed_id = bt.bed_id
-      LEFT JOIN room_images ri          ON ri.room_id = r.room_id
       WHERE ${where.join(' AND ')}
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
                rt.type_id, rt.name, rt.base_price, rt.capacity, rt.description
@@ -742,6 +949,7 @@ roomRouter.get('/', async (req: Request, res: Response) => {
              GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
              MIN(ri.url) AS image,
              COUNT(DISTINCT r.room_id) AS room_count,
+             MIN(r.room_id) AS first_room_id,
              GROUP_CONCAT(DISTINCT CONCAT(r.room_number, '|', r.floor) ORDER BY r.floor, r.room_number SEPARATOR ',') AS room_list
       FROM room_types rt
       LEFT JOIN room_categories rc      ON rt.category_id = rc.category_id
@@ -786,6 +994,7 @@ roomRouter.get('/', async (req: Request, res: Response) => {
         return { name, quantity: Number(qty) };
       }) : [],
       room_count: r.room_count ?? 0,
+      first_room_id: r.first_room_id ?? null,
       rooms: r.room_list
         ? r.room_list.split(',').map((s: string) => {
             const [room_number, floor] = s.split('|');

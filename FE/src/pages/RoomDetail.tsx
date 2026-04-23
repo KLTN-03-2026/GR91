@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   Star, Users, Maximize, BedDouble, Check, Calendar,
   ChevronLeft, ChevronRight, Loader2, X, MapPin, Shield, MessageSquare, Maximize2,
@@ -11,6 +11,7 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { roomApi, reviewApi, type ApiRoom, type ApiReview } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { redirectToLogin } from '../lib/redirectToLogin';
 
 const FALLBACK = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=1200&q=80';
 const TODAY = new Date().toISOString().split('T')[0];
@@ -114,6 +115,7 @@ function Lightbox({ images, index, onClose, onChange }: {
 export const RoomDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
 
   const [room, setRoom]       = useState<ReturnType<typeof buildRoom> | null>(null);
@@ -155,30 +157,55 @@ export const RoomDetail: React.FC = () => {
   const total     = basePrice + svcFee + vat;
   const rating    = avgRating(reviews);
 
-  const handleBook = () => {
-    if (!user) { navigate('/login'); return; }
+  const [bookingLoading, setBookingLoading] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState('');
+
+  const handleBook = async () => {
+    if (!user) { redirectToLogin(navigate, location); return; }
     if (!checkIn || !checkOut) { alert('Vui lòng chọn ngày nhận và trả phòng'); return; }
-    // Tìm phòng vật lý đầu tiên còn ACTIVE để truyền room_id
-    const firstRoom = room.availableRooms.find((r: any) => r.status === 'ACTIVE') ?? room.availableRooms[0];
-    navigate('/checkout', {
-      state: {
-        room: {
-          room_id:    firstRoom?.room_id ?? null,
-          room_number: firstRoom?.room_number ?? null,
-          name:       room.name,
-          type_name:  room.type,
-          price:      room.price,
-          image:      room.images[0] ?? null,
-          capacity:   room.capacity,
-          area_sqm:   room.area_sqm,
-          beds:       room.beds,
+
+    setAvailabilityError('');
+    setBookingLoading(true);
+    try {
+      // Kiểm tra từng phòng ACTIVE xem còn trống không
+      const activeRooms = room.availableRooms.filter((r: any) => r.status === 'ACTIVE');
+      let availableRoom: any = null;
+
+      for (const r of activeRooms) {
+        if (!r.room_id) continue;
+        try {
+          const avail = await roomApi.checkAvailability(r.room_id, checkIn, checkOut);
+          if (avail.available) { availableRoom = r; break; }
+        } catch { /* bỏ qua lỗi từng phòng */ }
+      }
+
+      if (!availableRoom) {
+        setAvailabilityError('Phòng đã được đặt trong khoảng thời gian này. Vui lòng chọn ngày khác.');
+        return;
+      }
+
+      navigate('/checkout', {
+        state: {
+          room: {
+            room_id:     availableRoom.room_id ?? null,
+            room_number: availableRoom.room_number ?? null,
+            name:        room.name,
+            type_name:   room.type,
+            price:       room.price,
+            image:       room.images[0] ?? null,
+            capacity:    room.capacity,
+            area_sqm:    room.area_sqm,
+            beds:        room.beds,
+          },
+          checkIn,
+          checkOut,
+          guestCount,
+          nights: n,
         },
-        checkIn,
-        checkOut,
-        guestCount,
-        nights: n,
-      },
-    });
+      });
+    } finally {
+      setBookingLoading(false);
+    }
   };
 
   if (loading) return (

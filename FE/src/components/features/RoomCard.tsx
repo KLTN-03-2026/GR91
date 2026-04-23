@@ -35,7 +35,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
   if (layout === 'grid') {
     return (
       <Link
-        to={`/rooms/${room.id}`}
+        to={room.room_id ? `/room/${room.room_id}` : `/rooms/${room.id}`}
         className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-[0_12px_24px_-4px_rgba(0,0,0,0.1)] transition-all duration-300 group border border-gray-100 flex flex-col h-full"
       >
         {/* Thumbnail - 16:9 */}
@@ -128,7 +128,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
   // Horizontal List layout (preserved from original or lightly touched)
   return (
     <Link
-      to={`/rooms/${room.id}`}
+      to={room.room_id ? `/room/${room.room_id}` : `/rooms/${room.id}`}
       className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 flex flex-col md:flex-row hover:shadow-md transition-shadow group block"
     >
       <div className="md:w-2/5 h-56 md:h-auto relative shrink-0">

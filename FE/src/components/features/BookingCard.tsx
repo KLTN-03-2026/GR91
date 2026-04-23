@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Calendar, Hash, Star, X, Clock, Users, CreditCard,
-  Loader2, Receipt, ChevronRight, Pencil,
+  Loader2, Receipt, ChevronRight, Pencil, MapPin, Key, CheckCircle,
 } from 'lucide-react';
 import type { ApiBooking, MyReview } from '../../lib/api';
 import { bookingApi } from '../../lib/api';
@@ -30,17 +30,21 @@ function calcLateFee(time: string | null | undefined, perNight: number) {
 }
 
 // ── Detail Modal ──────────────────────────────────────────────────────────────
-function DetailModal({ bookingId, onClose }: { bookingId: number; onClose: () => void }) {
+function DetailModal({ bookingId, onClose, onPaySuccess }: { bookingId: number; onClose: () => void; onPaySuccess?: () => void }) {
   const [detail, setDetail] = React.useState<ApiBooking | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
+  const navigate = useNavigate();
 
-  React.useEffect(() => {
+  const loadDetail = React.useCallback(() => {
+    setLoading(true);
     bookingApi.detail(bookingId)
       .then(setDetail)
       .catch(() => setError('Không thể tải chi tiết đặt phòng.'))
       .finally(() => setLoading(false));
   }, [bookingId]);
+
+  React.useEffect(() => { loadDetail(); }, [loadDetail]);
 
   // Tính breakdown giá
   const priceBreakdown = React.useMemo(() => {
@@ -57,6 +61,46 @@ function DetailModal({ bookingId, onClose }: { bookingId: number; onClose: () =>
     const vat          = Math.round(subtotal * 0.10);
     return { nights, roomPrice, pricePerNight, earlyFee, lateFee, svcFee, vat };
   }, [detail]);
+
+  const canRepay = detail?.status?.toUpperCase() === 'PENDING'
+    || detail?.status?.toUpperCase() === 'PARTIALLY_PAID';
+
+  const handleRepay = () => {
+    if (!detail) return;
+    const nights = detail.check_in && detail.check_out
+      ? Math.max(1, Math.floor((new Date(detail.check_out).getTime() - new Date(detail.check_in).getTime()) / 86400000))
+      : 1;
+    navigate('/checkout', {
+      state: {
+        room_id:          detail.rooms?.[0]?.room_id,
+        room_number:      detail.room_number,
+        type_name:        detail.room_type,
+        image:            detail.rooms?.[0]?.image ?? null,
+        check_in:         detail.check_in,
+        check_out:        detail.check_out,
+        check_in_time:    detail.check_in_time ?? '',
+        check_out_time:   detail.check_out_time ?? '',
+        nights,
+        base_price:       detail.room_price ? Math.round(detail.room_price / nights) : 0,
+        subtotal:         detail.room_price ?? 0,
+        existingBookingId: detail.booking_id,
+        existingBookingResult: {
+          booking_id:  detail.booking_id,
+          total_price: detail.total_price,
+          amount_due_now: Number(detail.remaining_amount ?? detail.total_price),
+          payment_percent: 100,
+          payment_policy: (detail.remaining_amount ?? 0) > 0 ? 'DEPOSIT' : 'FULL',
+          paid_amount: Number(detail.paid_amount ?? 0),
+          remaining_amount: Number(detail.remaining_amount ?? 0),
+          base_price:  detail.room_price ?? 0,
+          early_fee:   0,
+          late_fee:    0,
+          nights,
+          expires_at:  detail.expires_at ?? '',
+        },
+      },
+    });
+  };
 
   return (
     <div
@@ -176,6 +220,18 @@ function DetailModal({ bookingId, onClose }: { bookingId: number; onClose: () =>
                     <span>Tổng cộng</span>
                     <span className="text-blue-600">{formatVND(detail.total_price)}</span>
                   </div>
+                  {Number(detail.paid_amount ?? 0) > 0 && (
+                    <div className="flex justify-between text-green-700 text-xs pt-1">
+                      <span>Đã thanh toán</span>
+                      <span>{formatVND(Number(detail.paid_amount ?? 0))}</span>
+                    </div>
+                  )}
+                  {Number(detail.remaining_amount ?? 0) > 0 && (
+                    <div className="flex justify-between text-amber-700 text-xs">
+                      <span>Còn phải thanh toán</span>
+                      <span>{formatVND(Number(detail.remaining_amount ?? 0))}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -232,7 +288,13 @@ function DetailModal({ bookingId, onClose }: { bookingId: number; onClose: () =>
 
         {/* Footer */}
         {detail && (
-          <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 shrink-0">
+          <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 shrink-0 flex gap-3">
+            {canRepay && (
+              <Button fullWidth variant="primary" onClick={handleRepay}>
+                <CreditCard className="h-4 w-4 mr-2" />
+                Thanh toán ngay
+              </Button>
+            )}
             <Button fullWidth variant="secondary" onClick={onClose}>Đóng</Button>
           </div>
         )}
@@ -246,31 +308,127 @@ interface BookingCardProps {
   booking: ApiBooking;
   onCancel?: (id: number) => void;
   onReview?: (booking: ApiBooking) => void;
+  onRefresh?: () => void;
   existingReview?: MyReview;
   /** @deprecated dùng existingReview */
   reviewed?: boolean;
 }
 
 export const BookingCard: React.FC<BookingCardProps> = ({
-  booking, onCancel, onReview, existingReview, reviewed = false,
+  booking, onCancel, onReview, onRefresh, existingReview, reviewed = false,
 }) => {
   const [showDetail, setShowDetail] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [checkingIn, setCheckingIn] = useState(false);
+  const [showCheckInConfirm, setShowCheckInConfirm] = useState(false);
   const navigate = useNavigate();
 
   const status      = booking.status.toLowerCase() as any;
-  const isUpcoming  = status === 'confirmed' || status === 'pending';
+  const isUpcoming  = status === 'confirmed' || status === 'pending' || status === 'partially_paid';
   const isCompleted = booking.status === 'COMPLETED';
   const image       = booking.rooms?.[0]?.image ?? null;
   const hasReview   = !!existingReview || reviewed;
 
+  // Hiện nút thanh toán lại cho mọi booking PENDING chưa có giao dịch thành công
+  const canRepay = (booking.status === 'PENDING' || booking.status === 'PARTIALLY_PAID') && booking.remaining_amount !== 0;
+
   const handleCardClick = () => {
-    if (booking.type_id) navigate(`/rooms/${booking.type_id}`);
+    const roomId = booking.room_id ?? booking.rooms?.[0]?.room_id;
+    if (roomId) navigate(`/room/${roomId}`);
+    else if (booking.type_id) navigate(`/rooms/${booking.type_id}`);
   };
+
+  const handleRepay = async () => {
+    setPaying(true);
+    try {
+      const detail = await bookingApi.detail(booking.booking_id);
+      const nights = detail.check_in && detail.check_out
+        ? Math.max(1, Math.floor((new Date(detail.check_out).getTime() - new Date(detail.check_in).getTime()) / 86400000))
+        : 1;
+      navigate('/checkout', {
+        state: {
+          room_id:          detail.rooms?.[0]?.room_id ?? booking.room_id,
+          room_number:      detail.room_number,
+          type_name:        detail.room_type,
+          image:            detail.rooms?.[0]?.image ?? null,
+          check_in:         detail.check_in,
+          check_out:        detail.check_out,
+          check_in_time:    detail.check_in_time ?? '',
+          check_out_time:   detail.check_out_time ?? '',
+          nights,
+          base_price:       detail.room_price ? Math.round(detail.room_price / nights) : 0,
+          subtotal:         detail.room_price ?? 0,
+          existingBookingId: detail.booking_id,
+        existingBookingResult: {
+          booking_id:  detail.booking_id,
+          total_price: detail.total_price,
+          amount_due_now: Number(detail.remaining_amount ?? detail.total_price),
+          payment_percent: 100,
+          payment_policy: (detail.remaining_amount ?? 0) > 0 ? 'DEPOSIT' : 'FULL',
+          paid_amount: Number(detail.paid_amount ?? 0),
+          remaining_amount: Number(detail.remaining_amount ?? 0),
+          base_price:  detail.room_price ?? 0,
+          early_fee:   0,
+          late_fee:    0,
+            nights,
+            expires_at:  detail.expires_at ?? '',
+          },
+        },
+      });
+    } catch (e: any) {
+      alert(e.message ?? 'Không thể tải thông tin đặt phòng');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const handleCheckIn = async () => {
+    setCheckingIn(true);
+    try {
+      await bookingApi.checkIn(booking.booking_id);
+      setShowCheckInConfirm(false);
+      onRefresh?.();
+      // Highlight effect simulation
+      navigate(location.pathname, { state: { refresh: true }, replace: true });
+    } catch (e: any) {
+      alert(e.message ?? 'Check-in thất bại');
+    } finally {
+      setCheckingIn(false);
+    }
+  };
+
+  const isToday = booking.check_in ? new Date(booking.check_in).toISOString().split('T')[0] === new Date().toISOString().split('T')[0] : false;
+  const canCheckIn = booking.status === 'CONFIRMED';
 
   return (
     <>
       {showDetail && (
-        <DetailModal bookingId={booking.booking_id} onClose={() => setShowDetail(false)} />
+        <DetailModal
+          bookingId={booking.booking_id}
+          onClose={() => setShowDetail(false)}
+          onPaySuccess={() => { setShowDetail(false); onRefresh?.(); }}
+        />
+      )}
+
+      {showCheckInConfirm && (
+        <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
+          <Card className="max-w-sm w-full p-6 text-center space-y-4">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+              <Key className="h-8 w-8 text-green-600" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">Xác nhận nhận phòng</h3>
+            <p className="text-sm text-gray-500">
+              Bạn đã có mặt tại khách sạn và muốn thực hiện nhận phòng trực tuyến ngay bây giờ?
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button variant="secondary" fullWidth onClick={() => setShowCheckInConfirm(false)}>Hủy</Button>
+              <Button variant="primary" fullWidth className="bg-green-600 hover:bg-green-700" onClick={handleCheckIn} disabled={checkingIn}>
+                {checkingIn ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                Xác nhận
+              </Button>
+            </div>
+          </Card>
+        </div>
       )}
 
       <div
@@ -316,14 +474,28 @@ export const BookingCard: React.FC<BookingCardProps> = ({
           </div>
 
           <div className="flex justify-between items-end pt-4 border-t border-gray-100 mt-4">
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Tổng tiền</p>
-              <p className="font-bold text-blue-600">{formatVND(booking.total_price)}</p>
+            <div className="flex gap-6">
+              <div>
+                <p className="text-xs text-gray-500 mb-0.5">Tổng tiền</p>
+                <p className="font-bold text-gray-900">{formatVND(booking.total_price)}</p>
+              </div>
+              {Number(booking.remaining_amount ?? 0) > 0 && booking.status !== 'CANCELLED' && (
+                <div>
+                  <p className="text-xs text-amber-600 mb-0.5">Còn nợ</p>
+                  <p className="font-black text-blue-600">{formatVND(Number(booking.remaining_amount))}</p>
+                </div>
+              )}
             </div>
             <div className="flex gap-2 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
               {isUpcoming && onCancel && (
                 <Button variant="danger" size="sm" onClick={() => onCancel(booking.booking_id)}>
                   Hủy phòng
+                </Button>
+              )}
+              {canRepay && (
+                <Button variant="primary" size="sm" onClick={handleRepay} disabled={paying}>
+                  {paying ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <CreditCard className="h-3.5 w-3.5 mr-1" />}
+                  Thanh toán
                 </Button>
               )}
               {isCompleted && onReview && (
@@ -342,9 +514,24 @@ export const BookingCard: React.FC<BookingCardProps> = ({
                   </Button>
                 )
               )}
-              <Button variant="outline" size="sm" onClick={() => setShowDetail(true)}>
+               <Button variant="outline" size="sm" onClick={() => setShowDetail(true)}>
                 <ChevronRight className="h-3.5 w-3.5 mr-1" /> Xem chi tiết
               </Button>
+
+              {canCheckIn && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!isToday || checkingIn}
+                  onClick={() => setShowCheckInConfirm(true)}
+                  className={`
+                    ${isToday ? 'bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200 animate-pulse-slow' : 'bg-gray-400 cursor-not-allowed'}
+                  `}
+                >
+                  <MapPin className="h-3.5 w-3.5 mr-1" />
+                  {isToday ? 'Check-in trực tuyến' : 'Chưa đến ngày nhận phòng'}
+                </Button>
+              )}
             </div>
           </div>
         </div>

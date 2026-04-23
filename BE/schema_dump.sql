@@ -30,7 +30,7 @@ CREATE TABLE `activity_logs` (
   PRIMARY KEY (`log_id`),
   KEY `user_id` (`user_id`),
   CONSTRAINT `activity_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=43 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=52 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -116,14 +116,55 @@ CREATE TABLE `bookings` (
   `booking_id` int NOT NULL AUTO_INCREMENT,
   `user_id` int DEFAULT NULL,
   `total_price` int DEFAULT NULL,
-  `status` enum('PENDING','CONFIRMED','COMPLETED','CANCELLED') COLLATE utf8mb4_unicode_ci DEFAULT 'PENDING',
+  `status` enum('PENDING','CONFIRMED','COMPLETED','CANCELLED','PARTIALLY_PAID') COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `expires_at` datetime DEFAULT NULL,
+  `payment_policy` enum('FULL','DEPOSIT','PAY_AT_HOTEL') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'FULL',
+  `paid_amount` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `remaining_amount` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `guarantee_type` enum('NONE','CARD_HOLD') COLLATE utf8mb4_unicode_ci DEFAULT 'NONE',
+  `no_show_fee` decimal(12,2) DEFAULT '0.00',
   PRIMARY KEY (`booking_id`),
   KEY `user_id` (`user_id`),
   KEY `idx_booking_user` (`user_id`),
+  KEY `idx_bookings_payment_policy` (`payment_policy`),
+  KEY `idx_bookings_status_payment` (`status`,`payment_policy`),
   CONSTRAINT `bookings_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_0900_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `trg_update_remaining_amount` BEFORE UPDATE ON `bookings` FOR EACH ROW BEGIN
+  SET NEW.remaining_amount = NEW.total_price - NEW.paid_amount;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+
+--
+-- Table structure for table `bookings_backup`
+--
+
+DROP TABLE IF EXISTS `bookings_backup`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `bookings_backup` (
+  `booking_id` int NOT NULL DEFAULT '0',
+  `user_id` int DEFAULT NULL,
+  `total_price` int DEFAULT NULL,
+  `status` enum('PENDING','CONFIRMED','COMPLETED','CANCELLED') COLLATE utf8mb4_unicode_ci DEFAULT 'PENDING',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `expires_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -181,6 +222,27 @@ CREATE TABLE `hotel_info` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `payment_logs`
+--
+
+DROP TABLE IF EXISTS `payment_logs`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `payment_logs` (
+  `log_id` bigint NOT NULL AUTO_INCREMENT,
+  `payment_id` int NOT NULL,
+  `event_type` enum('INITIATE','WEBHOOK_RECEIVED','WEBHOOK_VERIFIED','SUCCESS','FAILED','REFUND') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `status` enum('PENDING','SUCCESS','FAILED') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `message` text COLLATE utf8mb4_unicode_ci,
+  `gateway_data` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`log_id`),
+  KEY `payment_id` (`payment_id`),
+  CONSTRAINT `payment_logs_ibfk_1` FOREIGN KEY (`payment_id`) REFERENCES `payment_transactions` (`payment_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `payment_transactions`
 --
 
@@ -194,10 +256,89 @@ CREATE TABLE `payment_transactions` (
   `method` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `status` enum('PENDING','SUCCESS','FAILED') COLLATE utf8mb4_unicode_ci DEFAULT 'PENDING',
   `transaction_date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `gateway` enum('momo','vnpay','cash') COLLATE utf8mb4_unicode_ci DEFAULT 'cash',
+  `type` enum('FULL','DEPOSIT','REMAINING') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'FULL',
+  `idempotency_key` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `partner_code` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `order_id` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `request_id` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `trans_id` bigint DEFAULT NULL,
+  `pay_url` text COLLATE utf8mb4_unicode_ci,
+  `deeplink` text COLLATE utf8mb4_unicode_ci,
+  `qr_code_url` text COLLATE utf8mb4_unicode_ci,
+  `result_code` int DEFAULT NULL,
+  `momo_message` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `response_time` timestamp NULL DEFAULT NULL,
+  `signature` text COLLATE utf8mb4_unicode_ci,
   PRIMARY KEY (`payment_id`),
+  UNIQUE KEY `idx_unique_order_id` (`order_id`),
+  UNIQUE KEY `idx_unique_request_id` (`request_id`),
   KEY `booking_id` (`booking_id`),
+  KEY `idx_momo_order_id` (`order_id`),
+  KEY `idx_momo_request_id` (`request_id`),
+  KEY `idx_momo_trans_id` (`trans_id`),
+  KEY `idx_payment_gateway_status` (`gateway`,`status`),
   CONSTRAINT `payment_transactions_ibfk_1` FOREIGN KEY (`booking_id`) REFERENCES `bookings` (`booking_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_0900_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `trg_momo_payment_success` AFTER UPDATE ON `payment_transactions` FOR EACH ROW BEGIN
+    IF NEW.gateway = 'momo'
+       AND NEW.status = 'SUCCESS'
+       AND (OLD.status IS NULL OR OLD.status != 'SUCCESS') THEN
+        
+        UPDATE bookings 
+        SET 
+            status = 'CONFIRMED',
+            expires_at = NULL,
+            updated_at = NOW()
+        WHERE booking_id = NEW.booking_id
+          AND status = 'PENDING';
+
+        INSERT INTO payment_logs (
+            payment_id, event_type, status, message, gateway_data
+        )
+        VALUES (
+            NEW.payment_id,
+            'SUCCESS',
+            'SUCCESS',
+            'MoMo payment success ΓåÆ Booking confirmed',
+            JSON_OBJECT(
+                'result_code', NEW.result_code,
+                'trans_id', NEW.trans_id
+            )
+        );
+    END IF;
+END */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+
+--
+-- Table structure for table `payment_transactions_backup`
+--
+
+DROP TABLE IF EXISTS `payment_transactions_backup`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `payment_transactions_backup` (
+  `payment_id` int NOT NULL DEFAULT '0',
+  `booking_id` int DEFAULT NULL,
+  `amount` int DEFAULT NULL,
+  `method` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` enum('PENDING','SUCCESS','FAILED') COLLATE utf8mb4_unicode_ci DEFAULT 'PENDING',
+  `transaction_date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -294,7 +435,7 @@ CREATE TABLE `room_images` (
   PRIMARY KEY (`image_id`),
   KEY `room_id` (`room_id`),
   CONSTRAINT `room_images_ibfk_1` FOREIGN KEY (`room_id`) REFERENCES `rooms` (`room_id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -356,7 +497,7 @@ CREATE TABLE `room_prices` (
   UNIQUE KEY `unique_room_date` (`room_id`,`date`),
   KEY `idx_room_date` (`room_id`,`date`),
   CONSTRAINT `room_prices_ibfk_1` FOREIGN KEY (`room_id`) REFERENCES `rooms` (`room_id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -493,6 +634,10 @@ CREATE TABLE `users` (
   UNIQUE KEY `username` (`username`)
 ) ENGINE=InnoDB AUTO_INCREMENT=9 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping routines for database 'smart_hotel'
+--
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -503,4 +648,4 @@ CREATE TABLE `users` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-04-17 21:23:21
+-- Dump completed on 2026-04-19  0:49:33

@@ -18,6 +18,7 @@ export interface ApiRoom {
   beds?: { name: string; quantity: number }[];
   image: string | null;
   room_count?: number;
+  first_room_id?: number | null;
   rooms?: { room_id?: number; room_number: string; floor: number; status?: string; images?: string[]; room_note?: string | null }[];
 }
 
@@ -58,7 +59,14 @@ async function get<T>(path: string, params?: Record<string, any>): Promise<T> {
     });
   }
   const res = await safeFetch(url.toString(), { headers: authHeaders() });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let message = `API error ${res.status}`;
+    try {
+      const data = await res.json();
+      message = data.message ?? data.error ?? message;
+    } catch {}
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -69,7 +77,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `API error ${res.status}`);
+  if (!res.ok) throw new Error(data.message ?? data.error ?? `API error ${res.status}`);
   return data;
 }
 
@@ -112,6 +120,7 @@ export const authApi = {
     post<AuthResponse>('/auth/login', { identifier, password }),
   register: (data: { username: string; full_name: string; email: string; phone?: string; password: string }) =>
     post<AuthResponse>('/auth/register', data),
+  me: () => get<AuthUser>('/auth/me'),
 };
 
 async function patch<T>(path: string, body: unknown): Promise<T> {
@@ -121,7 +130,7 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `API error ${res.status}`);
+  if (!res.ok) throw new Error(data.message ?? data.error ?? `API error ${res.status}`);
   return data;
 }
 
@@ -132,17 +141,20 @@ async function put<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `API error ${res.status}`);
+  if (!res.ok) throw new Error(data.message ?? data.error ?? `API error ${res.status}`);
   return data;
 }
 
-async function del<T>(path: string): Promise<T> {
+async function del<T>(path: string, body?: unknown): Promise<T> {
   const res = await safeFetch(BASE + path, {
     method: 'DELETE',
-    headers: { ...authHeaders() },
+    headers: body
+      ? { 'Content-Type': 'application/json', ...authHeaders() }
+      : { ...authHeaders() },
+    body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `API error ${res.status}`);
+  if (!res.ok) throw new Error(data.message ?? data.error ?? `API error ${res.status}`);
   return data;
 }
 
@@ -229,8 +241,11 @@ export interface ReviewStats {
 
 export interface ApiBooking {
   booking_id: number;
-  status: 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+  status: 'PENDING' | 'PARTIALLY_PAID' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
   total_price: number;
+  payment_policy?: 'FULL' | 'DEPOSIT' | 'PAY_AT_HOTEL' | null;
+  paid_amount?: number;
+  remaining_amount?: number;
   created_at: string;
   expires_at?: string | null;
   full_name?: string | null;
@@ -244,10 +259,13 @@ export interface ApiBooking {
   room_type: string;
   room_number: string;
   type_id?: number | null;
+  room_id?: number | null;
+  payment_method?: string | null;
+  payment_status?: 'PENDING' | 'SUCCESS' | 'FAILED' | null;
   // Detail expansion
   rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; check_in_time?: string | null; check_out_time?: string | null; price: number; image?: string | null }[];
   guests?: { booking_guest_id: number; full_name: string; email?: string | null; phone?: string | null }[];
-  payments?: { payment_id: number; amount: number; method: string; status: string; transaction_date: string }[];
+  payments?: { payment_id: number; amount: number; method: string; status: string; type?: 'FULL' | 'DEPOSIT' | 'REMAINING'; transaction_date: string }[];
 }
 
 export const reviewApi = {
@@ -292,6 +310,20 @@ export interface RoomUnit {
   room_note?: string | null;
 }
 
+/** Một ngày trong bảng giá 3 tầng */
+export interface PriceRangeDay {
+  date: string;         // YYYY-MM-DD
+  base_price: number;   // room_types.base_price
+  type_price: number | null;  // room_type_prices (override theo loại)
+  room_price: number | null;  // room_prices      (override theo phòng vật lý)
+  final_price: number;  // COALESCE(room_price, type_price, base_price)
+}
+
+export interface PriceRangeResponse {
+  data: PriceRangeDay[];
+  subtotal: number;     // tổng final_price của cả range
+}
+
 export interface Amenity {
   amenity_id: number;
   name: string;
@@ -310,6 +342,14 @@ export interface RoomDisplayUnit {
   effective_price: number;
   first_image: string | null;
   beds: { name: string; quantity: number }[];
+  // Booking hiện tại (chỉ có khi display_status === 'BOOKED')
+  booking: {
+    booking_id: number | null;
+    check_in: string | null;   // YYYY-MM-DD
+    check_out: string | null;  // YYYY-MM-DD
+    check_in_time: string;     // HH:mm
+    check_out_time: string;    // HH:mm
+  } | null;
 }
 
 export const adminRoomApi = {
@@ -345,13 +385,15 @@ export const adminRoomApi = {
     post<{ image_id: number; url: string }>(`/rooms/units/${roomId}/images`, { url }),
   deleteImage: (imageId: number) =>
     del<{ success: boolean }>(`/rooms/images/${imageId}`),
-  // Price override per room unit
+  // Price — 3-tier (room_price > type_price > base_price)
   getPrice: (roomId: number) =>
-    get<{ base_price: number; override_price: number | null; effective_price: number }>(`/rooms/units/${roomId}/price`),
-  setPrice: (roomId: number, price: number) =>
-    put<{ success: boolean }>(`/rooms/units/${roomId}/price`, { price }),
-  resetPrice: (roomId: number) =>
-    del<{ success: boolean }>(`/rooms/units/${roomId}/price`),
+    get<{ base_price: number; type_price: number | null; room_price: number | null; effective_price: number }>(`/rooms/units/${roomId}/price`),
+  getPriceRange: (roomId: number, check_in: string, check_out: string) =>
+    get<PriceRangeResponse>(`/rooms/units/${roomId}/price-range`, { check_in, check_out }),
+  setPrice: (roomId: number, data: { price: number; start_date: string; end_date: string }) =>
+    put<{ success: boolean; updated: number }>(`/rooms/units/${roomId}/price`, data),
+  resetPrice: (roomId: number, data?: { start_date: string; end_date: string }) =>
+    del<{ success: boolean }>(`/rooms/units/${roomId}/price`, data),
   // Room detail (full info with type + beds)
   getDetail: (roomId: number) =>
     get<{
@@ -407,14 +449,62 @@ export const bookingApi = {
     del<{ success: boolean }>(`/bookings/${id}/hard`),
   cancel: (id: number | string) =>
     del<{ success: boolean }>(`/bookings/${id}`),
-  create: (data: { room_id: number; check_in: string; check_out: string; check_in_time?: string; check_out_time?: string; guests: { full_name: string; email?: string; phone?: string }[]; payment_method?: string }) =>
-    post<{ success: boolean; booking_id: number; total_price: number; base_price: number; early_fee: number; late_fee: number; nights: number; expires_at: string }>('/bookings', data),
-  pay: (id: number | string) =>
-    patch<{ success: boolean; booking_id: number; status: string }>(`/bookings/${id}/pay`, {}),
+  create: (data: { room_id: number; check_in: string; check_out: string; check_in_time?: string; check_out_time?: string; guests: { full_name: string; email?: string; phone?: string }[]; payment_percent?: 30 | 50 | 100 }) =>
+    post<{ success: boolean; booking_id: number; total_price: number; amount_due_now: number; payment_percent: 30 | 50 | 100; payment_policy: 'FULL' | 'DEPOSIT'; paid_amount: number; remaining_amount: number; base_price: number; early_fee: number; late_fee: number; nights: number; expires_at: string }>('/bookings', data),
+  pay: (id: number) => patch<{ success: boolean; status: string }>(`/bookings/${id}/pay`),
+  vnpayInitiate: (id: number) => post<{ success: boolean; paymentUrl: string }>(`/bookings/${id}/vnpay`),
+  getDailyPlan: () => get<any[]>('/bookings/daily-plan'),
+  checkIn: (id: number) => patch<{ success: boolean; message: string }>(`/bookings/${id}/check-in`),
+  checkOut: (id: number) => patch<{ 
+    success: boolean; 
+    extraFee: number; 
+    description: string;
+    totalFinal: number;
+  }>(`/bookings/${id}/check-out`),
+  vnpayReturn: async (queryString: string): Promise<{ success: boolean; verified: boolean; booking_id: number; response_code: string | null; status: string; message: string }> => {
+    const res = await safeFetch(`${BASE}/bookings/vnpay-return?${queryString}`, { headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message ?? `API error ${res.status}`);
+    return data;
+  },
 };
+
+export interface ApiStats {
+  totalRevenue: number;
+  bookingCount: number;
+  totalRooms: number;
+  vacantRooms: number;
+  userCount: number;
+  recentBookings: any[];
+}
+
+export interface AnalyticsData {
+  revenueByMonth: { month: string; revenue: number }[];
+  bookingStatus: { name: string; value: number }[];
+  topRoomTypes: { name: string; value: number }[];
+  occupancy: { total: number; occupied: number; rate: number };
+  aiMessages: { user: number; bot: number; total: number };
+  newUsersToday: number;
+  growth: number;
+}
+
+export interface Invoice {
+  payment_id: number;
+  booking_id: number;
+  amount: number;
+  method: string;
+  gateway: string;
+  transaction_date: string;
+  trans_id: string;
+  full_name: string;
+  email: string;
+  booking_total: number;
+}
 
 export const statsApi = {
   get: (query?: ListQuery) => get<ApiStats>('/stats', query as any),
+  getAnalytics: (query?: ListQuery) => get<{ success: boolean; data: AnalyticsData }>('/stats/analytics', query as any),
+  getInvoices: (query?: ListQuery) => get<{ success: boolean; data: { invoices: Invoice[]; totalRevenue: number } }>('/stats/invoices', query as any),
 };
 
 export interface PhysicalRoomDetail {
@@ -442,13 +532,58 @@ export interface PhysicalRoomDetail {
   pricing_rules?: { rule_id: number; rule_type: 'checkin' | 'checkout'; start_hour: number; end_hour: number; percent: number; description: string }[];
 }
 
+export interface RoomAvailabilityDay {
+  date: string;
+  status: 'AVAILABLE' | 'PENDING' | 'BOOKED' | 'BLOCKED';
+}
+
+export interface RoomAvailabilityRange {
+  check_in: string;
+  check_out: string;
+  status: 'PENDING' | 'BOOKED' | 'BLOCKED';
+}
+
+export interface RoomAvailabilityResponse {
+  data: RoomAvailabilityDay[];
+  booked_ranges: RoomAvailabilityRange[];
+}
+
 export const publicRoomApi = {
   getPhysicalDetail: (roomId: number | string) =>
     get<PhysicalRoomDetail>(`/rooms/physical/${roomId}`),
   getAvailability: (roomId: number | string) =>
-    get<string[]>(`/rooms/physical/${roomId}/availability`),
+    get<RoomAvailabilityResponse>(`/rooms/physical/${roomId}/availability`),
   getSimilarRooms: (roomId: number | string, query?: { check_in?: string; check_out?: string }) =>
     get<any[]>(`/rooms/physical/${roomId}/similar`, query),
   getPricingRules: () =>
-    get<{ rule_id: number; rule_type: 'checkin' | 'checkout'; start_hour: number; end_hour: number; percent: number; description: string }[]>('/rooms/pricing-rules'),
+    get<any[]>('/rooms/pricing-rules'),
+  getPriceRange: (roomId: number, check_in: string, check_out: string) =>
+    get<PriceRangeResponse>(`/rooms/units/${roomId}/price-range`, { check_in, check_out }),
+};
+
+export interface ChatbotResponse {
+  success: boolean;
+  data: {
+    message: string;
+    rooms?: any[];
+  };
+  error?: string;
+}
+
+export const chatbotApi = {
+  sendMessage: (sessionId: string, message: string, context?: any) =>
+    post<ChatbotResponse>('/chatbot/message', { sessionId, message, context }),
+};
+
+export interface HotelInfo {
+  id: number;
+  name: string;
+  address: string;
+  phone: string;
+  email: string;
+  description: string;
+}
+
+export const hotelApi = {
+  getInfo: () => get<{ success: boolean; data: HotelInfo }>('/hotel/info'),
 };

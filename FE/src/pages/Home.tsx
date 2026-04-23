@@ -14,6 +14,7 @@ function toCard(r: ApiRoom): Room {
   const bedName = r.beds && r.beds.length > 0 ? r.beds[0].name : '';
   return {
     id: String(r.type_id),
+    room_id: r.first_room_id ?? r.rooms?.[0]?.room_id ?? null,
     name: r.type_name,
     type: r.type_name as any,
     price: r.base_price,

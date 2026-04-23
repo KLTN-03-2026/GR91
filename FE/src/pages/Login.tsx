@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Building2, Mail, Lock } from 'lucide-react';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
@@ -9,7 +9,15 @@ import { useAuth } from '../lib/auth';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
+
+  // Ưu tiên: location.state.from → localStorage fallback (không mất khi refresh)
+  const from: string =
+    (location.state as any)?.from ||
+    localStorage.getItem('redirectAfterLogin') ||
+    '/';
+
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -22,7 +30,11 @@ export const Login: React.FC = () => {
     try {
       const { token, user } = await authApi.login(identifier, password);
       login(token, user);
-      navigate(user.role === 'ADMIN' ? '/admin' : '/');
+      // Xóa fallback localStorage sau khi dùng
+      localStorage.removeItem('redirectAfterLogin');
+      // Admin luôn về /admin, user thường về `from`
+      const dest = user.role === 'ADMIN' ? '/admin' : from;
+      navigate(dest, { replace: true });
     } catch (err: any) {
       setError(err.message ?? 'Đăng nhập thất bại');
     } finally {

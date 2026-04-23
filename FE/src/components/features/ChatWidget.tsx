@@ -1,59 +1,82 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageCircle, X, Send, Bot, User } from 'lucide-react';
+import { MessageCircle, X, Send, Bot, User, Loader2, Star, ArrowRight } from 'lucide-react';
+import { chatbotApi } from '../../lib/api';
+import { useNavigate } from 'react-router-dom';
 
 interface Message {
   id: number;
   from: 'bot' | 'user';
   text: string;
+  rooms?: any[];
 }
 
 const QUICK_REPLIES = [
   'Xem phòng còn trống',
-  'Chính sách hủy phòng',
+  'Chính sách lưu trú',
   'Giờ nhận / trả phòng',
   'Liên hệ lễ tân',
 ];
 
-const BOT_RESPONSES: Record<string, string> = {
-  'xem phòng còn trống': 'Hiện tại chúng tôi còn nhiều phòng trống từ ngày mai. Bạn có thể xem danh sách tại trang Phòng nghỉ nhé!',
-  'chính sách hủy phòng': 'Bạn có thể hủy miễn phí trước 48 giờ nhận phòng. Sau thời gian đó sẽ tính phí tương đương 1 đêm.',
-  'giờ nhận / trả phòng': 'Nhận phòng từ 14:00, trả phòng trước 12:00. Nếu cần early check-in hoặc late check-out, vui lòng liên hệ lễ tân.',
-  'liên hệ lễ tân': 'Bạn có thể gọi trực tiếp cho lễ tân qua số +84 123 456 789 hoặc email info@smarthotel.vn. Chúng tôi phục vụ 24/7!',
-};
-
-function getBotReply(text: string): string {
-  const lower = text.toLowerCase();
-  for (const [key, reply] of Object.entries(BOT_RESPONSES)) {
-    if (lower.includes(key)) return reply;
-  }
-  return 'Cảm ơn bạn đã liên hệ! Để được hỗ trợ chi tiết hơn, vui lòng gọi hotline +84 123 456 789 hoặc để lại tin nhắn, chúng tôi sẽ phản hồi sớm nhất.';
-}
-
 export const ChatWidget: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { id: 0, from: 'bot', text: 'Xin chào! Tôi là trợ lý SmartHotel. Tôi có thể giúp gì cho bạn hôm nay? 😊' },
+    { id: 0, from: 'bot', text: 'Xin chào! Tôi là trợ lý AI từ SmartHotel. Tôi có thể giúp gì cho chuyến đi của bạn hôm nay? 😊' },
   ]);
   const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  
+  const [sessionId] = useState(() => {
+    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  });
+
   const bottomRef = useRef<HTMLDivElement>(null);
-  let nextId = useRef(1);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const nextId = useRef(1);
+  const navigate = useNavigate();
 
+  // Tự động cuộn xuống khi có tin nhắn mới hoặc mảng rooms xuất hiện
   useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, open]);
+    if (open) {
+      const scrollToBottom = () => {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      };
+      // Gọi ngay và gọi sau khi DOM update
+      scrollToBottom();
+      const timer = setTimeout(scrollToBottom, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [messages, open, isTyping]);
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || isTyping) return;
 
     const userMsg: Message = { id: nextId.current++, from: 'user', text: text.trim() };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
+    setIsTyping(true);
 
-    // Simulate bot typing delay
-    setTimeout(() => {
-      const botMsg: Message = { id: nextId.current++, from: 'bot', text: getBotReply(text) };
+    try {
+      const response = await chatbotApi.sendMessage(sessionId, text.trim());
+      
+      const botMsg: Message = { 
+        id: nextId.current++, 
+        from: 'bot', 
+        text: response.data.message || "",
+        rooms: response.data.rooms
+      };
+      
       setMessages((prev) => [...prev, botMsg]);
-    }, 700);
+    } catch (error) {
+      console.error('Chatbot API Error:', error);
+      const errorMsg: Message = { 
+        id: nextId.current++, 
+        from: 'bot', 
+        text: 'Dạ, hệ thống đang bận một chút. Anh/chị vui lòng thử lại sau giây lát nhé!' 
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -61,12 +84,16 @@ export const ChatWidget: React.FC = () => {
     sendMessage(input);
   };
 
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
+  };
+
   return (
     <>
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 flex flex-col bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
-          style={{ maxHeight: '70vh' }}
+        <div className="fixed bottom-24 right-6 z-[9999] w-[340px] sm:w-[400px] flex flex-col bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
+          style={{ maxHeight: '75vh' }}
         >
           {/* Header */}
           <div className="bg-blue-600 px-4 py-3 flex items-center justify-between shrink-0">
@@ -75,51 +102,90 @@ export const ChatWidget: React.FC = () => {
                 <Bot className="h-4 w-4 text-white" />
               </div>
               <div>
-                <p className="text-white font-semibold text-sm">SmartHotel Assistant</p>
+                <p className="text-white font-semibold text-sm">SmartHotel AI Assistant</p>
                 <div className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 bg-green-400 rounded-full"></span>
-                  <span className="text-blue-100 text-xs">Đang hoạt động</span>
+                  <span className="text-blue-100 text-xs">Phản hồi thông minh</span>
                 </div>
               </div>
             </div>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-white/80 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10"
-              aria-label="Đóng chat"
-            >
+            <button onClick={() => setOpen(false)} className="text-white/80 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10">
               <X className="h-4 w-4" />
             </button>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50">
+          <div 
+            ref={scrollContainerRef}
+            className="flex-1 overflow-y-auto px-4 py-4 space-y-4 bg-gray-50 flex flex-col scroll-smooth"
+          >
             {messages.map((msg) => (
               <div key={msg.id} className={`flex items-end gap-2 ${msg.from === 'user' ? 'flex-row-reverse' : ''}`}>
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${msg.from === 'bot' ? 'bg-blue-100' : 'bg-gray-200'}`}>
-                  {msg.from === 'bot'
-                    ? <Bot className="h-3.5 w-3.5 text-blue-600" />
-                    : <User className="h-3.5 w-3.5 text-gray-600" />
-                  }
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${msg.from === 'bot' ? 'bg-blue-100' : 'bg-gray-200'}`}>
+                  {msg.from === 'bot' ? <Bot className="h-4 w-4 text-blue-600" /> : <User className="h-4 w-4 text-gray-600" />}
                 </div>
-                <div className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                  msg.from === 'bot'
-                    ? 'bg-white text-gray-800 rounded-bl-sm shadow-sm border border-gray-100'
-                    : 'bg-blue-600 text-white rounded-br-sm'
-                }`}>
-                  {msg.text}
+                
+                <div className={`max-w-[85%] flex flex-col gap-2 ${msg.from === 'user' ? 'items-end' : 'items-start'}`}>
+                  {msg.text && (
+                    <div className={`px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap shadow-sm border ${
+                      msg.from === 'bot' ? 'bg-white text-gray-800 rounded-bl-sm border-gray-100' : 'bg-blue-600 text-white rounded-br-sm border-blue-500'
+                    }`}>
+                      {msg.text}
+                    </div>
+                  )}
+                  
+                  {/* Chỉ render Cards khi mảng rooms có dữ liệu thực tế */}
+                  {msg.rooms && Array.isArray(msg.rooms) && msg.rooms.length > 0 && (
+                    <div className="flex flex-col gap-3 w-[260px] mt-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                      {msg.rooms.slice(0, 3).map((r: any, idx: number) => {
+                        const roomId = r.id || r.room_id;
+                        const roomName = r.name || r.type_name || `Phòng ${r.room_number}`;
+                        const roomImage = r.image || r.first_image || 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80';
+                        const roomPrice = r.price || r.effective_price || r.base_price || 0;
+
+                        return (
+                          <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden group hover:border-blue-300 transition-colors">
+                            <div className="relative h-28 w-full overflow-hidden">
+                              <img src={roomImage} alt={roomName} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                            </div>
+                            <div className="p-3">
+                              <h4 className="font-bold text-sm text-gray-900 truncate">{roomName}</h4>
+                              <p className="text-blue-600 font-bold text-sm mt-1">{formatPrice(roomPrice)} <span className="text-gray-400 text-[10px]">/ đêm</span></p>
+                              <button onClick={() => navigate(`/room/${roomId}`)} className="mt-2 w-full py-2 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 text-[11px] font-bold rounded-lg transition-all border border-blue-100">
+                                Xem chi tiết
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
-            <div ref={bottomRef} />
+            {isTyping && (
+               <div className="flex items-end gap-2">
+                 <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                   <Bot className="h-4 w-4 text-blue-600" />
+                 </div>
+                 <div className="bg-white px-3.5 py-2.5 rounded-2xl rounded-bl-sm shadow-sm border border-gray-100 flex items-center gap-1.5 h-[40px]">
+                   <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                   <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                   <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce"></span>
+                 </div>
+               </div>
+            )}
+            <div ref={bottomRef} className="h-1 shrink-0" />
           </div>
 
           {/* Quick replies */}
-          <div className="px-3 py-2 flex gap-2 overflow-x-auto shrink-0 bg-gray-50 border-t border-gray-100">
+          <div className="px-3 py-2 flex gap-2 overflow-x-auto shrink-0 bg-gray-50 border-t border-gray-100 scrollbar-hide">
             {QUICK_REPLIES.map((q) => (
               <button
                 key={q}
                 onClick={() => sendMessage(q)}
-                className="shrink-0 text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-full transition-colors whitespace-nowrap"
+                disabled={isTyping}
+                className="shrink-0 text-xs text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-full transition-colors whitespace-nowrap disabled:opacity-50"
               >
                 {q}
               </button>
@@ -133,26 +199,18 @@ export const ChatWidget: React.FC = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Nhập tin nhắn..."
-              className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isTyping}
+              className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white p-2.5 rounded-xl transition-colors shrink-0"
-              aria-label="Gửi"
-            >
-              <Send className="h-4 w-4" />
+            <button type="submit" disabled={!input.trim() || isTyping} className="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl transition-all disabled:opacity-50">
+              {isTyping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>
           </form>
         </div>
       )}
 
       {/* Toggle button */}
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="fixed bottom-6 right-6 z-50 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-2xl hover:scale-110 transition-all border-4 border-white"
-        aria-label="Chat hỗ trợ"
-      >
+      <button onClick={() => setOpen((v) => !v)} className="fixed bottom-6 right-6 z-[9999] bg-blue-600 text-white p-4 rounded-full shadow-2xl hover:scale-110 transition-all border-4 border-white">
         {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
       </button>
     </>

@@ -161,12 +161,14 @@ const statements = [
 
   // 17. bookings
   `CREATE TABLE IF NOT EXISTS bookings (
-    booking_id  INT AUTO_INCREMENT PRIMARY KEY,
-    user_id     INT,
-    total_price INT,
-    status      ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED') DEFAULT 'PENDING',
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at  DATETIME NULL DEFAULT NULL,
+    booking_id       INT AUTO_INCREMENT PRIMARY KEY,
+    user_id          INT,
+    total_price      INT,
+    paid_amount      INT DEFAULT 0,
+    remaining_amount INT DEFAULT 0,
+    status           ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED') DEFAULT 'PENDING',
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at       DATETIME NULL DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
   )`,
 
@@ -200,8 +202,12 @@ const statements = [
     booking_id       INT,
     amount           INT,
     method           VARCHAR(50),
+    gateway          VARCHAR(50) DEFAULT 'CASH',
+    order_id         VARCHAR(100) NULL,
+    trans_id         VARCHAR(100) NULL,
     status           ENUM('PENDING','SUCCESS','FAILED') DEFAULT 'PENDING',
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_order (order_id, gateway),
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
   )`,
 
@@ -246,6 +252,18 @@ const statements = [
     action     VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+  )`,
+
+  // 25. payment_logs
+  `CREATE TABLE IF NOT EXISTS payment_logs (
+    log_id      INT AUTO_INCREMENT PRIMARY KEY,
+    booking_id  INT,
+    gateway     VARCHAR(50),
+    action      VARCHAR(100),
+    raw_data    JSON,
+    status      VARCHAR(50), 
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE SET NULL
   )`,
 ];
 

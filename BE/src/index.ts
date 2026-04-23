@@ -14,6 +14,7 @@ import { userRouter }    from './routes/users.js';
 import { reviewRouter }  from './routes/reviews.js';
 import { chatbotRouter } from './routes/chatbot.js';
 import { statsRouter }   from './routes/stats.js';
+import { hotelRouter }   from './routes/hotel.js';
 
 import { errorHandler } from './middleware/error.js';
 
@@ -30,6 +31,7 @@ app.use('/api/users',    userRouter);
 app.use('/api/reviews',  reviewRouter);
 app.use('/api/chatbot',  chatbotRouter);
 app.use('/api/stats',    statsRouter);
+app.use('/api/hotel',    hotelRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date() }));
