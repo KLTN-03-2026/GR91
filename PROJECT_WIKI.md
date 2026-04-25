@@ -196,7 +196,7 @@ demo_khoaluan/
 ### Nhóm Đặt phòng & Thanh toán
 | Bảng | Mô tả |
 |---|---|
-| `bookings` | Đơn đặt phòng: status (PENDING/CONFIRMED/COMPLETED/CANCELLED), expires_at, paid_amount, remaining_amount, payment_policy (FULL/DEPOSIT) |
+| `bookings` | Đơn đặt phòng: status (PENDING/PARTIALLY_PAID/CONFIRMED/**CHECKED_IN**/COMPLETED/CANCELLED), expires_at, paid_amount, remaining_amount, payment_policy (FULL/DEPOSIT) |
 | `booking_rooms` | Chi tiết phòng trong booking: check_in, check_out, check_in_time, check_out_time, giá |
 | `booking_guests` | Thông tin khách trong booking |
 | `payment_transactions` | Giao dịch thanh toán: method, gateway (vnpay/cash), type (FULL/DEPOSIT/REMAINING), status (PENDING/SUCCESS/FAILED), order_id, trans_id |
@@ -220,7 +220,7 @@ CREATE TABLE bookings (
   total_price      INT,
   paid_amount      INT DEFAULT 0,
   remaining_amount INT DEFAULT 0,
-  status           ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED','PARTIALLY_PAID') DEFAULT 'PENDING',
+  status           ENUM('PENDING','CONFIRMED','CHECKED_IN','COMPLETED','CANCELLED','PARTIALLY_PAID') DEFAULT 'PENDING',
   payment_policy   ENUM('FULL','DEPOSIT') DEFAULT 'FULL',
   created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   expires_at       DATETIME NULL DEFAULT NULL,
@@ -280,6 +280,13 @@ CREATE TABLE room_inventory (
 ### Indexes quan trọng
 - `room_inventory`: `(room_id, date, status)` — tối ưu query kiểm tra phòng trống
 - `payment_transactions`: `UNIQUE(order_id, gateway)` — dedup VNPay transactions
+
+> **Migration cần chạy:** `BE/migrations/add_checked_in_status.sql`
+> ```sql
+> ALTER TABLE bookings MODIFY COLUMN status
+>   ENUM('PENDING','CONFIRMED','CHECKED_IN','COMPLETED','CANCELLED','PARTIALLY_PAID')
+>   COLLATE utf8mb4_unicode_ci NOT NULL;
+> ```
 
 ---
 
@@ -368,10 +375,13 @@ Auth: `Authorization: Bearer <JWT>`
 | POST | `/bookings` | 🔑 | Tạo booking mới (transaction-safe, lock inventory, expires_at = NOW+10m) |
 | GET | `/bookings/:id` | 🔑 | Chi tiết booking (rooms + guests + payments + paid_amount + remaining_amount) |
 | GET | `/bookings/:id/status` | 🔑 | Polling nhẹ — chỉ trả `{ booking_id, status }` |
-| PATCH | `/bookings/:id/pay` | 🔑 | Thanh toán tiền mặt (Manual CONFIRM) |
-| POST | `/bookings/:id/vnpay` | 🔑 | Khởi tạo URL thanh toán VNPay Sandbox |
+| PATCH | `/bookings/:id/pay` | 🔑 | Thanh toán tiền mặt — cho phép status PENDING hoặc CHECKED_IN |
+| POST | `/bookings/:id/vnpay` | 🔑 | Khởi tạo URL thanh toán VNPay — cho phép PENDING, PARTIALLY_PAID, CHECKED_IN |
 | GET | `/bookings/vnpay-return` | 🔓 | Return URL — verify chữ ký + đọc status DB |
 | GET | `/bookings/vnpay-ipn` | 🔓 | Webhook IPN từ VNPay — Auto-confirm booking |
+| PATCH | `/bookings/:id/check-in` | 🔑 | Check-in trực tuyến (user: chỉ đúng ngày UTC+7; admin: bất kỳ ngày) |
+| PATCH | `/bookings/:id/check-out` | 👑 | Admin check-out, tính phí trả muộn theo giờ thực tế |
+| GET | `/bookings/daily-plan` | 👑 | Danh sách check-in/check-out hôm nay |
 | PATCH | `/bookings/:id/status` | 👑 | Admin đổi trạng thái |
 | DELETE | `/bookings/:id` | 🔑 | User hủy booking (khôi phục inventory) |
 | DELETE | `/bookings/:id/hard` | 👑 | Admin xóa cứng |
@@ -539,6 +549,44 @@ Check-out muộn (default 11:00):
 
 ### 7.5 Auto-Release Expired Bookings
 Job mỗi 60 giây: tìm PENDING quá `expires_at` → restore inventory → CANCELLED
+
+### 7.5b Check-in Flow (Online Self Check-in)
+```
+PATCH /api/bookings/:id/check-in
+  Điều kiện:
+    - booking.status === 'CONFIRMED'
+    - User: today (UTC+7) === check_in date (UTC+7)  ← fix timezone MySQL Date object
+    - Admin: bỏ qua kiểm tra ngày
+
+  Khi thành công:
+    - rooms.status → 'CLEANING'   (phòng đang chuẩn bị)
+    - bookings.status → 'CHECKED_IN'
+    - Ghi activity_log: CHECK_IN:{id}
+
+  FE (BookingCard):
+    - isToday dùng UTC+7 (Date.now() + 7h) để khớp BE
+    - Nút "Check-in trực tuyến" chỉ active khi isToday === true
+    - Sau check-in → navigate('/checkin-ticket/:id')
+```
+
+### 7.5c Thanh toán Tiền Còn Lại (PayRemainingModal)
+Khi booking có `remaining_amount > 0` và status là `PENDING`, `PARTIALLY_PAID`, hoặc `CHECKED_IN`:
+
+**FE — BookingCard hiển thị:**
+- "Tổng tiền" — `total_price`
+- "Đã thanh toán" (xanh lá) — `paid_amount` (chỉ hiện khi đã trả một phần)
+- "Còn cần thanh toán" (đỏ) — `remaining_amount`
+- Nút "Thanh toán" → mở `PayRemainingModal`
+
+**PayRemainingModal:**
+- Tóm tắt: Tổng / Đã trả / Còn lại
+- Chọn phương thức: VNPay (redirect) hoặc Tiền mặt (xác nhận tại quầy)
+- VNPay: `POST /bookings/:id/vnpay` → `window.location.href = paymentUrl`
+- Cash: `PATCH /bookings/:id/pay` → refresh danh sách
+
+**BE — Logic thanh toán khi CHECKED_IN:**
+- `PATCH /:id/pay`: cho phép PENDING hoặc CHECKED_IN; giữ nguyên status CHECKED_IN sau khi trả
+- `POST /:id/vnpay`: cho phép PENDING, PARTIALLY_PAID, CHECKED_IN; `finalAmount = remaining_amount`; `paymentType = 'REMAINING'`
 
 ### 7.6 Smart Room Recommendation (AI Scoring)
 ```

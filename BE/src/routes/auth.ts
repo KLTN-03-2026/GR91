@@ -107,7 +107,17 @@ authRouter.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
       [req.userId!]
     ) as any[];
     if (!rows[0]) return res.status(404).json({ error: 'Không tìm thấy user' });
-    res.json(rows[0]);
+    
+    const user = rows[0];
+    res.json({
+      userId: user.user_id,
+      username: user.username,
+      full_name: user.full_name,
+      email: user.email,
+      phone: user.phone,
+      created_at: user.created_at,
+      role: user.role_name ?? 'USER'
+    });
   } finally {
     conn.release();
   }

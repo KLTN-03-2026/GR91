@@ -36,6 +36,7 @@ import { VNPayReturn } from './pages/VNPayReturn';
 import { About } from './pages/About';
 import { Services } from './pages/Services';
 import { Contact } from './pages/Contact';
+import { CheckInTicket } from './pages/CheckInTicket';
 
 export default function App() {
   return (
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/checkout" element={<Checkout />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/history" element={<BookingHistory />} />
+            <Route path="/checkin-ticket/:id" element={<CheckInTicket />} />
             <Route path="/admin" element={<ProtectedRoute requireAdmin={true}><AdminLayout /></ProtectedRoute>}>
               <Route index element={<Dashboard />} />
               <Route path="rooms" element={<AdminRooms />} />

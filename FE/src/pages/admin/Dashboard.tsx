@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, Legend 
 } from 'recharts';
 import { StatCard } from '../../components/features/StatCard';
@@ -225,7 +225,13 @@ export const Dashboard: React.FC = () => {
             </div>
             <div className="p-6 h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={analytics?.revenueByMonth ?? []}>
+                <AreaChart data={analytics?.revenueByMonth ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                   <XAxis 
                     dataKey="month" 
@@ -241,12 +247,12 @@ export const Dashboard: React.FC = () => {
                     tickFormatter={(val) => `${val / 1000000}M`}
                   />
                   <Tooltip 
-                    cursor={{ fill: '#f9fafb' }}
+                    cursor={{ stroke: '#9ca3af', strokeWidth: 1, strokeDasharray: '3 3' }}
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                     formatter={(val: number) => [formatVND(val), 'Doanh thu']}
                   />
-                  <Bar dataKey="revenue" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={32} />
-                </BarChart>
+                  <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorRevenue)" />
+                </AreaChart>
               </ResponsiveContainer>
             </div>
           </Card>
@@ -296,27 +302,39 @@ export const Dashboard: React.FC = () => {
         <motion.div variants={itemVariants}>
           <Card padding={false} className="border-none shadow-sm h-full">
             <div className="p-6 border-b border-gray-50">
-              <h3 className="font-bold text-gray-900">Hạng phòng được ưa chuộng</h3>
-              <p className="text-xs text-gray-400">Xếp hạng theo lượt đặt phòng</p>
+              <h3 className="font-bold text-gray-900">Hiệu quả kinh doanh theo Hạng phòng</h3>
+              <p className="text-xs text-gray-400">Xếp hạng theo tổng doanh thu (VND)</p>
             </div>
-            <div className="p-6 space-y-6">
-              {(analytics?.topRoomTypes ?? []).length > 0 ? (analytics?.topRoomTypes ?? []).map((room, idx) => (
-                <div key={idx} className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="font-bold text-gray-700">{room.name}</span>
-                    <span className="text-blue-600 font-black">{room.value} Đơn</span>
-                  </div>
-                  <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden">
-                    <motion.div 
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(room.value / (analytics?.topRoomTypes[0]?.value || 1)) * 100}%` }}
-                      transition={{ duration: 1.5, ease: 'circOut' }}
-                      className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full"
+            <div className="p-6 h-[350px]">
+              {(analytics?.topRoomTypes ?? []).length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={analytics?.topRoomTypes ?? []} layout="vertical" margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
+                    <XAxis 
+                      type="number" 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fill: '#9ca3af', fontSize: 12 }}
+                      tickFormatter={(val) => `${val / 1000000}M`}
                     />
-                  </div>
-                </div>
-              )) : (
-                <div className="py-10 text-center text-gray-400 text-sm">Không có dữ liệu trong khoảng này</div>
+                    <YAxis 
+                      dataKey="name" 
+                      type="category" 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fill: '#4b5563', fontSize: 12, fontWeight: 500 }}
+                      width={100}
+                    />
+                    <Tooltip 
+                      cursor={{ fill: '#f9fafb' }}
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(val: number) => [formatVND(val), 'Doanh thu']}
+                    />
+                    <Bar dataKey="value" fill="#8b5cf6" radius={[0, 6, 6, 0]} barSize={24} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-gray-400 text-sm">Không có dữ liệu trong khoảng này</div>
               )}
             </div>
           </Card>

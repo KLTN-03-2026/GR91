@@ -26,13 +26,15 @@ export const Badge: React.FC<BadgeProps> = ({ variant = 'gray', children, classN
 
 // Convenience: booking status badge
 const statusMap: Record<BookingStatus, { variant: BadgeVariant; label: string }> = {
-  confirmed: { variant: 'green', label: 'Đã xác nhận' },
-  pending:   { variant: 'yellow', label: 'Chờ xử lý' },
-  completed: { variant: 'blue', label: 'Hoàn thành' },
-  cancelled: { variant: 'red', label: 'Đã hủy' },
+  confirmed:      { variant: 'green',  label: 'Đã xác nhận' },
+  pending:        { variant: 'yellow', label: 'Chờ xử lý' },
+  completed:      { variant: 'blue',   label: 'Hoàn thành' },
+  cancelled:      { variant: 'red',    label: 'Đã hủy' },
+  partially_paid: { variant: 'yellow', label: 'Thanh toán một phần' },
+  checked_in:     { variant: 'green',  label: 'Đã nhận phòng' },
 };
 
 export const StatusBadge: React.FC<{ status: BookingStatus }> = ({ status }) => {
-  const { variant, label } = statusMap[status];
-  return <Badge variant={variant}>{label}</Badge>;
+  const info = statusMap[status] ?? { variant: 'gray' as BadgeVariant, label: status };
+  return <Badge variant={info.variant}>{info.label}</Badge>;
 };

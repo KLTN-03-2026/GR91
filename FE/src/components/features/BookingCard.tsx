@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   Calendar, Hash, Star, X, Clock, Users, CreditCard,
   Loader2, Receipt, ChevronRight, Pencil, MapPin, Key, CheckCircle,
+  ShieldCheck, AlertCircle,
 } from 'lucide-react';
 import type { ApiBooking, MyReview } from '../../lib/api';
 import { bookingApi } from '../../lib/api';
 import { formatVND, formatDate, formatTime } from '../../lib/utils';
 import { StatusBadge } from '../ui/Badge';
 import { Button } from '../ui/Button';
+import { Card } from '../ui/Card';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=400&q=80';
 
@@ -29,7 +31,136 @@ function calcLateFee(time: string | null | undefined, perNight: number) {
   return 0;
 }
 
-// ── Detail Modal ──────────────────────────────────────────────────────────────
+// ── Pay Remaining Modal ───────────────────────────────────────────────────────
+function PayRemainingModal({
+  booking,
+  onClose,
+  onSuccess,
+}: {
+  booking: ApiBooking;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [method, setMethod] = useState<'VNPAY' | 'CASH'>('VNPAY');
+  const [paying, setPaying] = useState(false);
+  const [error, setError] = useState('');
+  const remaining = Number(booking.remaining_amount ?? 0);
+  const paid = Number(booking.paid_amount ?? 0);
+
+  const handlePay = async () => {
+    setPaying(true);
+    setError('');
+    try {
+      if (method === 'VNPAY') {
+        const { paymentUrl } = await bookingApi.vnpayInitiate(booking.booking_id);
+        window.location.href = paymentUrl;
+        return;
+      }
+      // CASH
+      await bookingApi.pay(booking.booking_id);
+      onSuccess();
+    } catch (e: any) {
+      setError(e.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <CreditCard className="h-5 w-5 text-blue-600" />
+            <h3 className="font-bold text-gray-900">Thanh toán số tiền còn lại</h3>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-5 space-y-4">
+          {/* Tóm tắt */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
+            <div className="flex justify-between text-gray-600">
+              <span>Tổng tiền đặt phòng</span>
+              <span className="font-medium text-gray-900">{formatVND(booking.total_price)}</span>
+            </div>
+            <div className="flex justify-between text-green-700">
+              <span>Đã thanh toán</span>
+              <span className="font-medium">{formatVND(paid)}</span>
+            </div>
+            <div className="flex justify-between text-red-600 border-t border-dashed border-gray-200 pt-2 font-bold text-base">
+              <span>Còn cần thanh toán</span>
+              <span>{formatVND(remaining)}</span>
+            </div>
+          </div>
+
+          {/* Phương thức */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Phương thức thanh toán</p>
+            {([
+              { id: 'VNPAY' as const, label: 'VNPay (ATM / QR / Thẻ quốc tế)', icon: CreditCard },
+              { id: 'CASH'  as const, label: 'Thanh toán tiền mặt tại quầy',    icon: ShieldCheck },
+            ]).map(({ id, label, icon: Icon }) => (
+              <label
+                key={id}
+                className={`flex items-center justify-between p-3.5 rounded-xl border-2 cursor-pointer transition-colors
+                  ${method === id ? 'border-blue-600 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    name="pay-method"
+                    checked={method === id}
+                    onChange={() => setMethod(id)}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <span className="text-sm font-medium text-gray-900">{label}</span>
+                </div>
+                <Icon className={`h-4 w-4 ${method === id ? 'text-blue-600' : 'text-gray-400'}`} />
+              </label>
+            ))}
+          </div>
+
+          {method === 'CASH' && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 text-xs text-amber-800">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              Vui lòng đến quầy lễ tân để thanh toán tiền mặt. Nhân viên sẽ xác nhận giao dịch.
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 text-xs text-red-700">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 flex gap-3">
+          <Button variant="secondary" fullWidth onClick={onClose} disabled={paying}>Hủy</Button>
+          <Button variant="primary" fullWidth onClick={handlePay} disabled={paying}>
+            {paying
+              ? <><Loader2 className="h-4 w-4 animate-spin mr-1.5" />Đang xử lý...</>
+              : method === 'VNPAY'
+                ? `Thanh toán ${formatVND(remaining)}`
+                : 'Xác nhận đã thanh toán'
+            }
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function DetailModal({ bookingId, onClose, onPaySuccess }: { bookingId: number; onClose: () => void; onPaySuccess?: () => void }) {
   const [detail, setDetail] = React.useState<ApiBooking | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -62,8 +193,11 @@ function DetailModal({ bookingId, onClose, onPaySuccess }: { bookingId: number; 
     return { nights, roomPrice, pricePerNight, earlyFee, lateFee, svcFee, vat };
   }, [detail]);
 
-  const canRepay = detail?.status?.toUpperCase() === 'PENDING'
-    || detail?.status?.toUpperCase() === 'PARTIALLY_PAID';
+  const canRepay = (
+    detail?.status?.toUpperCase() === 'PENDING' ||
+    detail?.status?.toUpperCase() === 'PARTIALLY_PAID' ||
+    detail?.status?.toUpperCase() === 'CHECKED_IN'
+  ) && Number(detail?.remaining_amount ?? 0) > 0;
 
   const handleRepay = () => {
     if (!detail) return;
@@ -319,6 +453,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({
 }) => {
   const [showDetail, setShowDetail] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [showPayRemaining, setShowPayRemaining] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
   const [showCheckInConfirm, setShowCheckInConfirm] = useState(false);
   const navigate = useNavigate();
@@ -326,11 +461,16 @@ export const BookingCard: React.FC<BookingCardProps> = ({
   const status      = booking.status.toLowerCase() as any;
   const isUpcoming  = status === 'confirmed' || status === 'pending' || status === 'partially_paid';
   const isCompleted = booking.status === 'COMPLETED';
-  const image       = booking.rooms?.[0]?.image ?? null;
+  // Ảnh: list API trả về room_image, detail API trả về rooms[0].image
+  const image       = booking.room_image ?? booking.rooms?.[0]?.image ?? null;
   const hasReview   = !!existingReview || reviewed;
 
-  // Hiện nút thanh toán lại cho mọi booking PENDING chưa có giao dịch thành công
-  const canRepay = (booking.status === 'PENDING' || booking.status === 'PARTIALLY_PAID') && booking.remaining_amount !== 0;
+  // Hiện nút thanh toán lại cho mọi booking PENDING/PARTIALLY_PAID/CHECKED_IN còn nợ
+  const canRepay = (
+    booking.status === 'PENDING' ||
+    booking.status === 'PARTIALLY_PAID' ||
+    booking.status === 'CHECKED_IN'
+  ) && Number(booking.remaining_amount ?? 0) > 0;
 
   const handleCardClick = () => {
     const roomId = booking.room_id ?? booking.rooms?.[0]?.room_id;
@@ -338,49 +478,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({
     else if (booking.type_id) navigate(`/rooms/${booking.type_id}`);
   };
 
-  const handleRepay = async () => {
-    setPaying(true);
-    try {
-      const detail = await bookingApi.detail(booking.booking_id);
-      const nights = detail.check_in && detail.check_out
-        ? Math.max(1, Math.floor((new Date(detail.check_out).getTime() - new Date(detail.check_in).getTime()) / 86400000))
-        : 1;
-      navigate('/checkout', {
-        state: {
-          room_id:          detail.rooms?.[0]?.room_id ?? booking.room_id,
-          room_number:      detail.room_number,
-          type_name:        detail.room_type,
-          image:            detail.rooms?.[0]?.image ?? null,
-          check_in:         detail.check_in,
-          check_out:        detail.check_out,
-          check_in_time:    detail.check_in_time ?? '',
-          check_out_time:   detail.check_out_time ?? '',
-          nights,
-          base_price:       detail.room_price ? Math.round(detail.room_price / nights) : 0,
-          subtotal:         detail.room_price ?? 0,
-          existingBookingId: detail.booking_id,
-        existingBookingResult: {
-          booking_id:  detail.booking_id,
-          total_price: detail.total_price,
-          amount_due_now: Number(detail.remaining_amount ?? detail.total_price),
-          payment_percent: 100,
-          payment_policy: (detail.remaining_amount ?? 0) > 0 ? 'DEPOSIT' : 'FULL',
-          paid_amount: Number(detail.paid_amount ?? 0),
-          remaining_amount: Number(detail.remaining_amount ?? 0),
-          base_price:  detail.room_price ?? 0,
-          early_fee:   0,
-          late_fee:    0,
-            nights,
-            expires_at:  detail.expires_at ?? '',
-          },
-        },
-      });
-    } catch (e: any) {
-      alert(e.message ?? 'Không thể tải thông tin đặt phòng');
-    } finally {
-      setPaying(false);
-    }
-  };
+  const handleRepay = () => setShowPayRemaining(true);
 
   const handleCheckIn = async () => {
     setCheckingIn(true);
@@ -388,8 +486,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({
       await bookingApi.checkIn(booking.booking_id);
       setShowCheckInConfirm(false);
       onRefresh?.();
-      // Highlight effect simulation
-      navigate(location.pathname, { state: { refresh: true }, replace: true });
+      navigate(`/checkin-ticket/${booking.booking_id}`, { state: { booking } });
     } catch (e: any) {
       alert(e.message ?? 'Check-in thất bại');
     } finally {
@@ -397,8 +494,19 @@ export const BookingCard: React.FC<BookingCardProps> = ({
     }
   };
 
-  const isToday = booking.check_in ? new Date(booking.check_in).toISOString().split('T')[0] === new Date().toISOString().split('T')[0] : false;
-  const canCheckIn = booking.status === 'CONFIRMED';
+  let isToday = false;
+  if (booking.check_in) {
+    // Dùng UTC+7 để khớp với logic BE, tránh lệch ngày theo timezone browser
+    const nowVN = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const todayVN = nowVN.toISOString().split('T')[0];
+    const checkInStr = String(booking.check_in);
+    // Nếu là "YYYY-MM-DD" dùng trực tiếp, nếu là ISO string thì parse + offset
+    const checkInDate = checkInStr.length === 10
+      ? checkInStr
+      : new Date(new Date(checkInStr).getTime() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
+    isToday = todayVN === checkInDate;
+  }
+  const canCheckIn = booking.status === 'CONFIRMED' && isToday;
 
   return (
     <>
@@ -407,6 +515,14 @@ export const BookingCard: React.FC<BookingCardProps> = ({
           bookingId={booking.booking_id}
           onClose={() => setShowDetail(false)}
           onPaySuccess={() => { setShowDetail(false); onRefresh?.(); }}
+        />
+      )}
+
+      {showPayRemaining && (
+        <PayRemainingModal
+          booking={booking}
+          onClose={() => setShowPayRemaining(false)}
+          onSuccess={() => { setShowPayRemaining(false); onRefresh?.(); }}
         />
       )}
 
@@ -479,10 +595,16 @@ export const BookingCard: React.FC<BookingCardProps> = ({
                 <p className="text-xs text-gray-500 mb-0.5">Tổng tiền</p>
                 <p className="font-bold text-gray-900">{formatVND(booking.total_price)}</p>
               </div>
+              {Number(booking.paid_amount ?? 0) > 0 && Number(booking.remaining_amount ?? 0) > 0 && booking.status !== 'CANCELLED' && (
+                <div>
+                  <p className="text-xs text-green-600 mb-0.5">Đã thanh toán</p>
+                  <p className="font-semibold text-green-700">{formatVND(Number(booking.paid_amount))}</p>
+                </div>
+              )}
               {Number(booking.remaining_amount ?? 0) > 0 && booking.status !== 'CANCELLED' && (
                 <div>
-                  <p className="text-xs text-amber-600 mb-0.5">Còn nợ</p>
-                  <p className="font-black text-blue-600">{formatVND(Number(booking.remaining_amount))}</p>
+                  <p className="text-xs text-amber-600 mb-0.5">Còn cần thanh toán</p>
+                  <p className="font-black text-red-500">{formatVND(Number(booking.remaining_amount))}</p>
                 </div>
               )}
             </div>
@@ -522,14 +644,12 @@ export const BookingCard: React.FC<BookingCardProps> = ({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!isToday || checkingIn}
                   onClick={() => setShowCheckInConfirm(true)}
-                  className={`
-                    ${isToday ? 'bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200 animate-pulse-slow' : 'bg-gray-400 cursor-not-allowed'}
-                  `}
+                  disabled={checkingIn}
+                  className="bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200 animate-pulse-slow"
                 >
                   <MapPin className="h-3.5 w-3.5 mr-1" />
-                  {isToday ? 'Check-in trực tuyến' : 'Chưa đến ngày nhận phòng'}
+                  Check-in trực tuyến
                 </Button>
               )}
             </div>

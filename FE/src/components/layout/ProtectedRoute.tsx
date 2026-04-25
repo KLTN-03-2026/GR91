@@ -14,7 +14,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
   const { token, user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const { addToast } = useToast();
+  const toast = useToast();
   const [isVerifying, setIsVerifying] = useState(true);
 
   useEffect(() => {
@@ -26,7 +26,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
     authApi.me()
       .then((meData) => {
         if (requireAdmin && meData.role !== 'ADMIN') {
-          addToast({ title: 'Truy cập bị từ chối', message: 'Bạn không có quyền truy cập trang quản trị', type: 'error' });
+          toast('Bạn không có quyền truy cập trang quản trị', 'error');
           navigate('/');
         } else {
           setIsVerifying(false);
@@ -37,7 +37,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
         logout();
         redirectToLogin(navigate, location, { message: 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại' });
       });
-  }, [token, navigate, location, logout, requireAdmin, addToast]);
+  }, [token, navigate, location, logout, requireAdmin, toast]);
 
   if (!token || isVerifying) {
     return (

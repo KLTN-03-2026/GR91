@@ -171,7 +171,17 @@ async function syncVNPayTransaction(
     return { ok: false as const, code: 'NOT_FOUND' };
   }
 
-  if (Number(booking.total_price) !== Number(params.amount)) {
+  // Lấy số tiền thực tế đã gửi lên VNPay từ payment_transactions
+  const [ptRows] = await conn.execute(
+    `SELECT amount FROM payment_transactions
+     WHERE booking_id = ? AND gateway = 'vnpay'
+     ORDER BY payment_id DESC LIMIT 1`,
+    [params.bookingId],
+  ) as any[];
+
+  const expectedAmount = ptRows[0] ? Number(ptRows[0].amount) : Number(booking.total_price);
+
+  if (Number(params.amount) !== expectedAmount) {
     return { ok: false as const, code: 'INVALID_AMOUNT', booking };
   }
 
@@ -698,11 +708,11 @@ bookingRouter.patch('/:id/pay', requireAuth, async (req: AuthRequest, res: Respo
     if (req.userRole !== 'ADMIN' && booking.user_id !== req.userId)
       return res.status(403).json({ success: false, message: 'Forbidden', code: 'FORBIDDEN' });
 
-    if (booking.status !== 'PENDING')
-      return res.status(400).json({ success: false, message: 'Chỉ có thể thanh toán đặt phòng đang chờ xử lý', code: 'INVALID_STATUS' });
+    if (!['PENDING', 'CHECKED_IN'].includes(booking.status))
+      return res.status(400).json({ success: false, message: 'Chỉ có thể thanh toán đặt phòng đang chờ xử lý hoặc đã nhận phòng', code: 'INVALID_STATUS' });
 
-    // Kiểm tra hết hạn
-    if (booking.expires_at && new Date(booking.expires_at) < new Date()) {
+    // Kiểm tra hết hạn (chỉ áp dụng cho PENDING)
+    if (booking.status === 'PENDING' && booking.expires_at && new Date(booking.expires_at) < new Date()) {
       await conn.rollback();
       return res.status(410).json({ success: false, message: 'Đặt phòng đã hết hạn thanh toán', code: 'BOOKING_EXPIRED' });
     }
@@ -715,15 +725,16 @@ bookingRouter.patch('/:id/pay', requireAuth, async (req: AuthRequest, res: Respo
       [req.params.id]
     );
 
-    // Cập nhật booking → CONFIRMED, xóa expires_at
+    // Nếu đang CHECKED_IN thì giữ nguyên, nếu PENDING thì chuyển CONFIRMED
+    const nextStatus = booking.status === 'CHECKED_IN' ? 'CHECKED_IN' : 'CONFIRMED';
     await conn.execute(
       `UPDATE bookings
-       SET status = 'CONFIRMED',
+       SET status = ?,
            paid_amount = total_price,
            remaining_amount = 0,
            expires_at = NULL
        WHERE booking_id = ?`,
-      [req.params.id]
+      [nextStatus, req.params.id]
     );
 
     await updateInventoryStatusForBooking(conn, Number(req.params.id), 'BOOKED');
@@ -789,17 +800,19 @@ bookingRouter.post('/:id/vnpay', requireAuth, async (req: AuthRequest, res: Resp
     const booking = rows[0];
     if (!booking)
       return res.status(404).json({ success: false, message: 'Không tìm thấy đặt phòng' });
-    if (!['PENDING', 'PARTIALLY_PAID'].includes(booking.status))
+    if (!['PENDING', 'PARTIALLY_PAID', 'CHECKED_IN'].includes(booking.status))
       return res.status(400).json({ success: false, message: 'Booking không ở trạng thái có thể thanh toán' });
     if (booking.status === 'PENDING' && booking.expires_at && new Date(booking.expires_at) < new Date())
       return res.status(410).json({ success: false, message: 'Đặt phòng đã hết hạn thanh toán' });
 
-    let finalAmount = booking.status === 'PARTIALLY_PAID'
+    let finalAmount = (booking.status === 'PARTIALLY_PAID' || booking.status === 'CHECKED_IN')
       ? Number(booking.remaining_amount ?? 0)
       : 0;
-    let paymentType = booking.status === 'PARTIALLY_PAID' ? 'REMAINING' : (booking.payment_policy === 'DEPOSIT' ? 'DEPOSIT' : 'FULL');
+    let paymentType = (booking.status === 'PARTIALLY_PAID' || booking.status === 'CHECKED_IN')
+      ? 'REMAINING'
+      : (booking.payment_policy === 'DEPOSIT' ? 'DEPOSIT' : 'FULL');
 
-    if (booking.status !== 'PARTIALLY_PAID') {
+    if (booking.status !== 'PARTIALLY_PAID' && booking.status !== 'CHECKED_IN') {
       const [pendingRows] = await conn.execute(
         `SELECT amount, type
          FROM payment_transactions
@@ -816,7 +829,9 @@ bookingRouter.post('/:id/vnpay', requireAuth, async (req: AuthRequest, res: Resp
     }
 
     if (!finalAmount || finalAmount <= 0) {
-      finalAmount = booking.status === 'PARTIALLY_PAID' ? Number(booking.remaining_amount ?? 0) : Number(booking.total_price);
+      finalAmount = (booking.status === 'PARTIALLY_PAID' || booking.status === 'CHECKED_IN')
+        ? Number(booking.remaining_amount ?? 0)
+        : Number(booking.total_price);
     }
 
     const rawIp  = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
@@ -996,14 +1011,36 @@ bookingRouter.patch('/:id/check-in', requireAuth, async (req: AuthRequest, res: 
       return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ để check-in' });
     }
 
-    const today = new Date().toISOString().split('T')[0];
-    const checkInDate = new Date(booking.check_in).toISOString().split('T')[0];
-    
+    // Dùng local date (UTC+7) để tránh lệch ngày khi so sánh
+    const nowLocal = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const today = nowLocal.toISOString().split('T')[0];
+
+    // MySQL trả Date object ở UTC midnight → cần cộng +7h trước khi lấy ngày
+    const checkInRaw = booking.check_in;
+    let checkInDate: string;
+    if (checkInRaw instanceof Date) {
+      checkInDate = new Date(checkInRaw.getTime() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
+    } else {
+      // Nếu là string "YYYY-MM-DD" hoặc "YYYY-MM-DDTHH:mm:ss.sssZ"
+      const raw = String(checkInRaw);
+      if (raw.length === 10) {
+        // Đã là "YYYY-MM-DD", dùng trực tiếp
+        checkInDate = raw;
+      } else {
+        checkInDate = new Date(new Date(raw).getTime() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
+      }
+    }
+
     if (req.userRole !== 'ADMIN' && today !== checkInDate) {
       return res.status(400).json({ success: false, message: 'Chưa đến ngày nhận phòng' });
     }
 
-    await conn.execute('UPDATE rooms SET status = ? WHERE room_id = ?', ['MAINTENANCE', booking.room_id]);
+    await conn.execute('UPDATE rooms SET status = ? WHERE room_id = ?', ['CLEANING', booking.room_id]);
+
+    await conn.execute(
+      'UPDATE bookings SET status = ? WHERE booking_id = ?',
+      ['CHECKED_IN', req.params.id]
+    );
 
     await conn.execute(
       'INSERT INTO activity_logs (user_id, action) VALUES (?, ?)',

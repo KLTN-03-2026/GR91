@@ -1,5 +1,5 @@
 export type RoomType = 'Standard' | 'Superior' | 'Deluxe' | 'Suite' | 'Villa';
-export type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled';
+export type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'partially_paid' | 'checked_in';
 export type UserRole = 'user' | 'admin';
 
 export interface Room {

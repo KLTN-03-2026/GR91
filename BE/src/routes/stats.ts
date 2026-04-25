@@ -115,9 +115,9 @@ statsRouter.get('/analytics', requireAuth, requireAdmin, async (_req: AuthReques
       GROUP BY status
     `, filterParams) as any[];
 
-    // 3. Top 5 loại phòng được đặt nhiều nhất (Áp dụng Filter)
+    // 3. Top 5 loại phòng mang lại doanh thu cao nhất (Áp dụng Filter)
     const [topRooms] = await conn.execute(`
-      SELECT rt.name, COUNT(br.room_id) as count
+      SELECT rt.name, COALESCE(SUM(br.price), 0) as count
       FROM booking_rooms br
       JOIN rooms r ON br.room_id = r.room_id
       JOIN room_types rt ON r.type_id = rt.type_id

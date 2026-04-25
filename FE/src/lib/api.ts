@@ -262,6 +262,7 @@ export interface ApiBooking {
   room_id?: number | null;
   payment_method?: string | null;
   payment_status?: 'PENDING' | 'SUCCESS' | 'FAILED' | null;
+  room_image?: string | null;
   // Detail expansion
   rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; check_in_time?: string | null; check_out_time?: string | null; price: number; image?: string | null }[];
   guests?: { booking_guest_id: number; full_name: string; email?: string | null; phone?: string | null }[];
