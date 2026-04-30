@@ -696,35 +696,35 @@ setInterval(60s):
   → UPDATE booking SET status='CANCELLED'
 ```
 
-### Flow 7: Thanh toán VNPay Sandbox
+### Flow 7: Thanh toán VNPay Sandbox (Nâng cao)
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     VNPAY PAYMENT FLOW                              │
 └─────────────────────────────────────────────────────────────────────┘
 
-[1] USER chọn VNPay trên Checkout (step 2)
+[1] USER chọn VNPay trên Checkout (Thanh toán cọc / Thanh toán phần còn lại)
     FE → POST /api/bookings/:id/vnpay
          { booking_id, total_price }
 
-[2] BE — VNPayService.createPaymentUrl()
-    ├── Fix IPv6: ::1 → 127.0.0.1
-    ├── Build params object (sort alphabet)
-    ├── signData = qs.stringify(params, { encode: false })
-    ├── signed   = HMAC-SHA512(signData, VNP_HASH_SECRET)
-    └── URL = VNP_URL?{params}&vnp_SecureHash={signed}
+[2] BE — VNPay SDK (lehuygiang28/vnpay v2.5.0)
+    ├── Tạo mã giao dịch độc nhất (vnp_TxnRef): `txnRef = ${booking_id}_${Date.now()}`
+    │   (Tránh lỗi trùng mã giao dịch khi khách hàng thanh toán nhiều đợt)
+    ├── Upsert bảng `payment_transactions` với status='PENDING' và `order_id`=txnRef
+    └── vnpay.buildPaymentUrl() sinh ra URL có chứa HMAC-SHA512 checksum
 
 [3] FE nhận paymentUrl → window.location.href = paymentUrl
-    → Browser redirect sang sandbox.vnpayment.vn
+    → Browser redirect sang https://sandbox.vnpayment.vn
 
 [4] User thanh toán trên VNPay Portal
     (nhập thẻ ATM / QR / thẻ quốc tế)
 
 [5a] VNPay → IPN (server-to-server) GET /api/bookings/vnpay-ipn
-     ├── verifyReturnUrl(query) — HMAC-SHA512 verify
-     ├── Check booking tồn tại + status = PENDING
-     ├── Check amount khớp (total_price === vnp_Amount/100)
-     ├── Upsert payment_transactions (method=VNPAY, status=SUCCESS/FAILED)
-     ├── UPDATE bookings SET status='CONFIRMED' (nếu success)
+     ├── verifyIpnCall(query) — HMAC-SHA512 verify
+     ├── Tách `booking_id` từ `vnp_TxnRef` (txnRef.split('_')[0])
+     ├── Check amount khớp với record `payment_transactions`
+     ├── Cập nhật payment_transactions (order_id=vnp_TxnRef) thành SUCCESS/FAILED
+     ├── Cộng dồn `paid_amount`, trừ `remaining_amount` trong bảng `bookings`
+     ├── Nếu remaining_amount == 0 → status='CONFIRMED', nếu > 0 → 'PARTIALLY_PAID'
      ├── INSERT payment_logs (audit trail)
      └── Response { RspCode: '00', Message: 'Success' }
 
@@ -732,15 +732,15 @@ setInterval(60s):
      = http://localhost:3000/payment/vnpay-return?vnp_*=...
 
 [6] FE VNPayReturn.tsx
-    ├── Gọi bookingApi.vnpayReturn(queryString)
-    │   → GET /api/bookings/vnpay-return?{all vnp params}
-    ├── BE verify chữ ký + đọc booking status từ DB
-    ├── Hiển thị kết quả (success / failed)
-    └── Nút "Xem lịch sử" → navigate('/history', { state: { refresh: true } })
+     ├── Gọi bookingApi.vnpayReturn(queryString)
+     │   → GET /api/bookings/vnpay-return?{all vnp params}
+     ├── BE verify chữ ký + thực hiện đồng bộ DB idempotent (như IPN)
+     ├── Hiển thị kết quả (success / failed)
+     └── Nút "Xem lịch sử" → navigate('/history', { state: { refresh: true } })
 
 [7] BookingHistory.tsx
-    ├── Detect state.refresh → gọi load() sau 500ms
-    └── Hiển thị booking với status CONFIRMED mới
+     ├── Detect state.refresh → gọi load() sau 500ms
+     └── Hiển thị booking với status và paid_amount mới
 ```
 
 ### Flow 4: Admin Quản lý Phòng — Dashboard Realtime

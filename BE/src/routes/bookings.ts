@@ -154,6 +154,7 @@ async function syncVNPayTransaction(
   conn: PoolConnection,
   params: {
     bookingId: number;
+    orderId: string;
     amount: number;
     transactionNo?: string | null;
     transactionStatus: 'SUCCESS' | 'FAILED';
@@ -194,7 +195,7 @@ async function syncVNPayTransaction(
        gateway = VALUES(gateway),
        trans_id = VALUES(trans_id),
        status = VALUES(status)`,
-    [params.bookingId, params.amount, String(params.bookingId), params.transactionNo ?? null, params.transactionStatus],
+    [params.bookingId, params.amount, params.orderId, params.transactionNo ?? null, params.transactionStatus],
   ) as any[];
 
   const insertedPaymentId = Number(upsertResult?.insertId ?? 0);
@@ -207,7 +208,7 @@ async function syncVNPayTransaction(
        WHERE order_id = ?
        ORDER BY payment_id DESC
        LIMIT 1`,
-      [String(params.bookingId)],
+      [params.orderId],
     ) as any[];
     paymentId = Number(paymentRows[0]?.payment_id ?? 0);
   }
@@ -287,13 +288,14 @@ bookingRouter.get('/vnpay-return', async (req: any, res: Response) => {
   const conn = await pool.getConnection();
   try {
     const query = toQueryRecord(req.query);
-    const bookingIdRaw = query.vnp_TxnRef;
+    const txnRefRaw = query.vnp_TxnRef;
 
-    if (!bookingIdRaw) {
+    if (!txnRefRaw) {
       return res.status(400).json({ success: false, message: 'Thiếu thông tin giao dịch', code: 'MISSING_PARAMS' });
     }
 
-    const bookingId = Number(bookingIdRaw);
+    const bookingIdStr = txnRefRaw.split('_')[0];
+    const bookingId = Number(bookingIdStr);
     if (!Number.isInteger(bookingId) || bookingId <= 0) {
       return res.status(400).json({ success: false, message: 'Mã đặt phòng không hợp lệ', code: 'INVALID_BOOKING_ID' });
     }
@@ -317,6 +319,7 @@ bookingRouter.get('/vnpay-return', async (req: any, res: Response) => {
     await conn.beginTransaction();
     const result = await syncVNPayTransaction(conn, {
       bookingId,
+      orderId: txnRefRaw,
       amount,
       transactionNo: query.vnp_TransactionNo ?? null,
       transactionStatus: txStatus,
@@ -360,7 +363,8 @@ bookingRouter.get('/vnpay-ipn', async (req: any, res: Response) => {
   try {
     const query = toQueryRecord(req.query);
     const verify = verifyIpnCall(query);
-    const bookingIdRaw = query.vnp_TxnRef;
+    const txnRefRaw = query.vnp_TxnRef;
+    const bookingIdRaw = txnRefRaw ? txnRefRaw.split('_')[0] : '';
     const amount = Number(query.vnp_Amount ?? 0) / 100;
 
     if (!verify.isVerified) {
@@ -375,6 +379,7 @@ bookingRouter.get('/vnpay-ipn', async (req: any, res: Response) => {
     await conn.beginTransaction();
     const result = await syncVNPayTransaction(conn, {
       bookingId,
+      orderId: txnRefRaw,
       amount,
       transactionNo: query.vnp_TransactionNo ?? null,
       transactionStatus: verify.isSuccess ? 'SUCCESS' : 'FAILED',
@@ -837,21 +842,31 @@ bookingRouter.post('/:id/vnpay', requireAuth, async (req: AuthRequest, res: Resp
     const rawIp  = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
     const ipAddr = normalizeIp(Array.isArray(rawIp) ? rawIp[0] : String(rawIp));
 
-    await conn.execute(
-      `UPDATE payment_transactions
-       SET method = 'VNPAY',
-           gateway = 'vnpay',
-           order_id = ?,
-           trans_id = NULL,
-           amount = ?,
-           type = ?,
-           status = 'PENDING'
-       WHERE booking_id = ? AND (status = 'PENDING' OR gateway = 'vnpay')`,
-      [String(booking.booking_id), finalAmount, paymentType, booking.booking_id],
-    );
+    const txnRef = `${booking.booking_id}_${Date.now()}`;
+
+    const [pendingTx] = await conn.execute(
+      `SELECT payment_id FROM payment_transactions WHERE booking_id = ? AND status = 'PENDING'`,
+      [booking.booking_id]
+    ) as any[];
+
+    if ((pendingTx as any[]).length > 0) {
+      await conn.execute(
+        `UPDATE payment_transactions
+         SET method = 'VNPAY', gateway = 'vnpay', order_id = ?, amount = ?, type = ?
+         WHERE payment_id = ?`,
+        [txnRef, finalAmount, paymentType, (pendingTx as any[])[0].payment_id]
+      );
+    } else {
+      await conn.execute(
+        `INSERT INTO payment_transactions (booking_id, amount, method, gateway, type, order_id, status)
+         VALUES (?, ?, 'VNPAY', 'vnpay', ?, ?, 'PENDING')`,
+        [booking.booking_id, finalAmount, paymentType, txnRef]
+      );
+    }
 
     const paymentUrl = createPaymentUrl({
       bookingId: booking.booking_id,
+      txnRef: txnRef,
       amount:    finalAmount,
       ipAddr,
       expireAt: booking.status === 'PENDING' && booking.expires_at ? new Date(booking.expires_at) : null,
