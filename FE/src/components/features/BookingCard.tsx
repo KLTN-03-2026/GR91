@@ -354,18 +354,28 @@ function DetailModal({ bookingId, onClose, onPaySuccess }: { bookingId: number; 
                     <span>Tổng cộng</span>
                     <span className="text-blue-600">{formatVND(detail.total_price)}</span>
                   </div>
-                  {Number(detail.paid_amount ?? 0) > 0 && (
-                    <div className="flex justify-between text-green-700 text-xs pt-1">
-                      <span>Đã thanh toán</span>
-                      <span>{formatVND(Number(detail.paid_amount ?? 0))}</span>
-                    </div>
-                  )}
-                  {Number(detail.remaining_amount ?? 0) > 0 && (
-                    <div className="flex justify-between text-amber-700 text-xs">
-                      <span>Còn phải thanh toán</span>
-                      <span>{formatVND(Number(detail.remaining_amount ?? 0))}</span>
-                    </div>
-                  )}
+                  {(() => {
+                    const paid      = Number(detail.paid_amount ?? 0);
+                    const remaining = Number(detail.remaining_amount ?? 0);
+                    // Tính lại remaining từ total - paid để tránh lỗi DB
+                    const actualRemaining = Math.max(0, detail.total_price - paid);
+                    return (
+                      <>
+                        {paid > 0 && (
+                          <div className="flex justify-between text-green-700 text-xs pt-1">
+                            <span>Đã thanh toán</span>
+                            <span className="font-semibold">{formatVND(paid)}</span>
+                          </div>
+                        )}
+                        {actualRemaining > 0 && detail.status !== 'CANCELLED' && (
+                          <div className="flex justify-between text-amber-700 text-xs font-semibold border-t border-dashed border-amber-200 pt-1 mt-1">
+                            <span>Còn phải thanh toán</span>
+                            <span className="text-red-600">{formatVND(actualRemaining)}</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 

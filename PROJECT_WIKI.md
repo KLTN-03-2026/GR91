@@ -771,10 +771,13 @@ setInterval(60s):
 - **Kiến trúc**: Sử dụng **LangChain** và **LangGraph** để xây dựng Agent theo mô hình ReAct (Reasoning + Acting). Chạy local hoàn toàn với Ollama (`llama3.2:3b`).
 - **Luồng xử lý (Hybrid Pipeline tối ưu hiệu năng)**:
   1. **Quick Intent (Regex-first)**: Dùng Regex nhận diện cực nhanh các ý định phổ biến (`ask_availability`, `ask_price`, `ask_booking`, `general_info`). Nếu Regex thất bại, fallback sang LLM với `INTENT_PROMPT` để phân loại.
-  2. **Bypass LLM (Direct Tool Execution)**: Đối với `ask_availability` và `ask_price`, hệ thống dùng Regex trích xuất tham số (`people`, `max_price`) và gọi **trực tiếp** SQL tool (`search_rooms`). Việc bỏ qua vòng lặp ReAct của LLM giúp giảm độ trễ xuống mức tối thiểu.
-  3. **RAG Knowledge Base**: Đối với `general_info` (chính sách, tiện ích), hệ thống bỏ qua LLM và truy xuất trực tiếp từ file `knowledge.js` để trả lời nhanh và chính xác nhất.
-  4. **ReAct Agent Fallback**: Với `ask_booking` hoặc câu hỏi khác (`other`), hệ thống khởi tạo `createReactAgent` để Agent tự động suy luận và sử dụng các tools (vd: `get_booking`).
+  2. **NLU + Context Memory**: `nlu.js` parse tiếng Việt thành `people`, `checkin/checkout`, `room_type`, `min_price/max_price`, `amenities`, `floor`, `sort_by`. `context.js` merge theo `sessionId`, hỗ trợ các câu nối tiếp như "loại khác giá 500", "giá cao hơn nữa".
+  3. **Bypass LLM (Direct Tool Execution)**: Đối với `ask_availability`, `ask_price` và `alternative`, hệ thống gọi trực tiếp SQL tool `search_rooms` với đủ tiêu chí thay vì chỉ `people/max_price`.
+  4. **Amenity Routing**: Các câu hỏi tiện ích được xử lý bằng DB trước FAQ: tiện ích khách sạn (`getHotelAmenitiesInfo`), tiện ích trong phòng (`getRoomAmenitiesInfo`), và tìm phòng theo tiện ích (`searchRoomsByAmenity`) như "phòng có bồn tắm nằm".
+  5. **RAG Knowledge Base**: Đối với chính sách/FAQ, hệ thống bỏ qua LLM và truy xuất trực tiếp từ `knowledge.js`.
+  6. **ReAct Agent Fallback**: Với `ask_booking` hoặc câu hỏi khác (`other`), hệ thống khởi tạo `createReactAgent` để Agent tự động suy luận và sử dụng các tools (vd: `get_booking`).
 - **Xử lý Output**: Dùng hàm `safeParseJSON` để bóc tách an toàn các khối JSON từ phản hồi của LLM, giúp Frontend luôn nhận đúng định dạng `{ message, rooms: [] }` để render giao diện danh sách phòng.
+- **Tài liệu chi tiết**: Xem `CHATBOT_DOCUMENTATION.md` để biết đầy đủ luồng NLU, session/context, tìm phòng theo tiện ích, hỏi tiện ích khách sạn/phòng và các ví dụ hội thoại.
 
 ### 7.16 Hệ thống thanh toán linh hoạt (Partial Payment)
 - **Chính sách**: Cho phép khách hàng chọn thanh toán **30%, 50% hoặc 100%** giá trị đơn hàng lúc đặt phòng.

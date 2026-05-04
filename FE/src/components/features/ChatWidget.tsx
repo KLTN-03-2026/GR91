@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageCircle, X, Send, Bot, User, Loader2, Star, ArrowRight } from 'lucide-react';
+import { MessageCircle, X, Send, Bot, User, Loader2 } from 'lucide-react';
 import { chatbotApi } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
 
@@ -24,9 +24,14 @@ export const ChatWidget: React.FC = () => {
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [expandedMessages, setExpandedMessages] = useState<Record<number, boolean>>({});
   
   const [sessionId] = useState(() => {
-    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const stored = localStorage.getItem('smarthotel_chat_session');
+    if (stored) return stored;
+    const next = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    localStorage.setItem('smarthotel_chat_session', next);
+    return next;
   });
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -137,7 +142,7 @@ export const ChatWidget: React.FC = () => {
                   {/* Chỉ render Cards khi mảng rooms có dữ liệu thực tế */}
                   {msg.rooms && Array.isArray(msg.rooms) && msg.rooms.length > 0 && (
                     <div className="flex flex-col gap-3 w-[260px] mt-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                      {msg.rooms.slice(0, 3).map((r: any, idx: number) => {
+                      {(expandedMessages[msg.id] ? msg.rooms : msg.rooms.slice(0, 3)).map((r: any, idx: number) => {
                         const roomId = r.id || r.room_id;
                         const roomName = r.name || r.type_name || `Phòng ${r.room_number}`;
                         const roomImage = r.image || r.first_image || 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80';
@@ -151,13 +156,26 @@ export const ChatWidget: React.FC = () => {
                             <div className="p-3">
                               <h4 className="font-bold text-sm text-gray-900 truncate">{roomName}</h4>
                               <p className="text-blue-600 font-bold text-sm mt-1">{formatPrice(roomPrice)} <span className="text-gray-400 text-[10px]">/ đêm</span></p>
-                              <button onClick={() => navigate(`/room/${roomId}`)} className="mt-2 w-full py-2 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 text-[11px] font-bold rounded-lg transition-all border border-blue-100">
-                                Xem chi tiết
-                              </button>
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <button onClick={() => navigate(`/room/${roomId}`)} className="py-2 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 text-[11px] font-bold rounded-lg transition-all border border-blue-100">
+                                  Xem chi tiết
+                                </button>
+                                <button onClick={() => navigate(`/room/${roomId}`)} className="py-2 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold rounded-lg transition-all border border-blue-600">
+                                  Đặt phòng
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
                       })}
+                      {msg.rooms.length > 3 && (
+                        <button
+                          onClick={() => setExpandedMessages((prev) => ({ ...prev, [msg.id]: !prev[msg.id] }))}
+                          className="w-full py-2 text-xs font-semibold text-blue-600 bg-white border border-blue-100 rounded-lg hover:bg-blue-50"
+                        >
+                          {expandedMessages[msg.id] ? 'Thu gọn' : `Xem thêm ${msg.rooms.length - 3} phòng`}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

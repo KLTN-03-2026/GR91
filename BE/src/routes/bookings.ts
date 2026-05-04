@@ -172,15 +172,18 @@ async function syncVNPayTransaction(
     return { ok: false as const, code: 'NOT_FOUND' };
   }
 
-  // Lấy số tiền thực tế đã gửi lên VNPay từ payment_transactions
+  // Lấy số tiền thực tế đã gửi lên VNPay từ payment_transactions (khớp theo order_id)
   const [ptRows] = await conn.execute(
-    `SELECT amount FROM payment_transactions
-     WHERE booking_id = ? AND gateway = 'vnpay'
-     ORDER BY payment_id DESC LIMIT 1`,
-    [params.bookingId],
+    `SELECT payment_id, amount, status FROM payment_transactions
+     WHERE order_id = ?
+     ORDER BY payment_id DESC LIMIT 1
+     FOR UPDATE`,
+    [params.orderId],
   ) as any[];
 
-  const expectedAmount = ptRows[0] ? Number(ptRows[0].amount) : Number(booking.total_price);
+  const existingTx = ptRows[0];
+  const expectedAmount = existingTx ? Number(existingTx.amount) : Number(booking.total_price);
+  const wasAlreadySuccessful = existingTx?.status === 'SUCCESS';
 
   if (Number(params.amount) !== expectedAmount) {
     return { ok: false as const, code: 'INVALID_AMOUNT', booking };
@@ -194,12 +197,15 @@ async function syncVNPayTransaction(
        method = VALUES(method),
        gateway = VALUES(gateway),
        trans_id = VALUES(trans_id),
-       status = VALUES(status)`,
+       status = CASE
+         WHEN status = 'SUCCESS' AND VALUES(status) = 'FAILED' THEN status
+         ELSE VALUES(status)
+       END`,
     [params.bookingId, params.amount, params.orderId, params.transactionNo ?? null, params.transactionStatus],
   ) as any[];
 
   const insertedPaymentId = Number(upsertResult?.insertId ?? 0);
-  let paymentId = insertedPaymentId;
+  let paymentId = Number(existingTx?.payment_id ?? insertedPaymentId);
 
   if (!paymentId) {
     const [paymentRows] = await conn.execute(
@@ -217,12 +223,15 @@ async function syncVNPayTransaction(
     throw new Error('Không tìm thấy payment transaction để ghi log');
   }
 
-  if (params.transactionStatus === 'SUCCESS') {
+  if (params.transactionStatus === 'SUCCESS' && !wasAlreadySuccessful) {
     const totalPrice = Number(booking.total_price ?? 0);
     const currentPaid = Number(booking.paid_amount ?? 0);
     const nextPaid = Math.min(totalPrice, currentPaid + Number(params.amount));
     const nextRemaining = Math.max(0, totalPrice - nextPaid);
-    const nextStatus = nextRemaining === 0 ? 'CONFIRMED' : 'PARTIALLY_PAID';
+    // Giữ CHECKED_IN nếu đang check-in, không downgrade về CONFIRMED
+    const nextStatus = nextRemaining === 0
+      ? (booking.status === 'CHECKED_IN' ? 'CHECKED_IN' : 'CONFIRMED')
+      : 'PARTIALLY_PAID';
 
     await conn.execute(
       `UPDATE bookings

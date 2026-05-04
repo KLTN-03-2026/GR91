@@ -62,10 +62,13 @@ function calcLateFee(time: string, basePerNight: number): number {
 
 // ─── Countdown timer ─────────────────────────────────────────────────────────
 function useCountdown(expiresAt: string | null) {
-  const [remaining, setRemaining] = useState<number>(0);
+  const [remaining, setRemaining] = useState<number>(() => {
+    if (!expiresAt) return Infinity; // không có hạn → không đếm ngược
+    return Math.max(0, new Date(expiresAt).getTime() - Date.now());
+  });
 
   useEffect(() => {
-    if (!expiresAt) return;
+    if (!expiresAt) return; // không có expires_at → không cần timer
     const tick = () => {
       const diff = new Date(expiresAt).getTime() - Date.now();
       setRemaining(Math.max(0, diff));
@@ -75,9 +78,13 @@ function useCountdown(expiresAt: string | null) {
     return () => clearInterval(id);
   }, [expiresAt]);
 
-  const mins = Math.floor(remaining / 60000);
-  const secs = Math.floor((remaining % 60000) / 1000);
-  return { remaining, label: `${mins}:${secs.toString().padStart(2, '0')}` };
+  const isExpired = remaining === 0 && !!expiresAt;
+  const mins = Number.isFinite(remaining) ? Math.floor(remaining / 60000) : 0;
+  const secs = Number.isFinite(remaining) ? Math.floor((remaining % 60000) / 1000) : 0;
+  const label = expiresAt
+    ? `${mins}:${secs.toString().padStart(2, '0')}`
+    : '';
+  return { remaining, isExpired, label };
 }
 
 // ─── Step indicator ───────────────────────────────────────────────────────────
@@ -226,7 +233,7 @@ export const Checkout: React.FC = () => {
   const handlePay = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bookingResult) return;
-    if (countdown.remaining === 0) {
+    if (countdown.isExpired) {
       setPayError('Đặt phòng đã hết hạn. Vui lòng thực hiện lại.');
       return;
     }
@@ -453,12 +460,14 @@ export const Checkout: React.FC = () => {
                 <form onSubmit={handlePay}>
                   <div className="flex items-center justify-between mb-6">
                     <h2 className="text-xl font-bold text-gray-900">Thanh toán</h2>
-                    {/* Countdown */}
+                  {/* Countdown — chỉ hiện khi có expires_at */}
+                  {bookingResult.expires_at && (
                     <div className={`flex items-center gap-1.5 text-sm font-semibold px-3 py-1.5 rounded-full
-                      ${countdown.remaining > 120000 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600 animate-pulse'}`}>
+                      ${!countdown.isExpired && countdown.remaining > 120000 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600 animate-pulse'}`}>
                       <Clock className="h-3.5 w-3.5" />
-                      {countdown.remaining > 0 ? `Hết hạn sau ${countdown.label}` : 'Đã hết hạn'}
+                      {countdown.isExpired ? 'Đã hết hạn' : `Hết hạn sau ${countdown.label}`}
                     </div>
+                  )}
                   </div>
 
                   {payError && (
@@ -468,7 +477,7 @@ export const Checkout: React.FC = () => {
                     </div>
                   )}
 
-                  {countdown.remaining === 0 && (
+                  {countdown.isExpired && (
                     <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3 mb-5">
                       Đặt phòng đã hết hạn. Vui lòng quay lại và thực hiện lại.
                     </div>
@@ -515,7 +524,7 @@ export const Checkout: React.FC = () => {
                     type="submit"
                     fullWidth
                     size="lg"
-                    disabled={paying || countdown.remaining === 0}
+                    disabled={paying || countdown.isExpired}
                   >
                     {paying
                       ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Đang xử lý...</>

@@ -24,8 +24,7 @@ const ROOM_TYPE_MAP = {
   "view thành phố": "thành phố", "city view": "thành phố", "nhìn phố": "thành phố",
   "view vườn": "vườn", "hướng vườn": "vườn",
   "view hồ bơi": "hồ bơi",
-  // Tiện nghi — chỉ map khi không có keyword loại phòng nào khác
-  "có bồn tắm": "bồn tắm", "jacuzzi": "jacuzzi",
+  // View / style keywords only. Amenity keywords are handled by AMENITIES_MAP.
 };
 
 const AMENITIES_MAP = {
@@ -415,7 +414,7 @@ function detectIntent(text) {
   if (/không đặt được phòng|lỗi thanh toán|không nhận được email|hỗ trợ gấp|gọi lễ tân/.test(lower)) return "support";
   if (/đánh giá|review|khách sạn có tốt không|xem đánh giá/.test(lower)) return "review";
   if (/đặt|book|chốt|xác nhận đặt|reservation/.test(lower)) return "book";
-  if (/gợi ý khác|phòng khác|alternative|xem thêm/.test(lower)) return "alternative";
+  if (/gợi ý khác|phòng khác|loại khác|hạng khác|kiểu khác|giá cao hơn|cao hơn nữa|đắt hơn|mắc hơn|rẻ hơn|alternative|xem thêm/.test(lower)) return "alternative";
   if (/(^|\s)(xin chào|hello|hi|chào)(\s|$)/.test(lower)) return "greeting";
   if (/cảm ơn|thank/.test(lower)) return "thanks";
   return "search";

@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { diffNights } from "./date.js";
+import pool from "./db.js";
 
 const redisClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
 let useRedis = false;
@@ -65,6 +66,27 @@ export async function saveHistory(sessionId, history) {
     await redisClient.set(`hist:${sessionId}`, JSON.stringify(trimmed), { EX: TTL });
   } else {
     memStore[sessionId] = trimmed;
+  }
+}
+
+async function ensureDbSession(sessionId, userId = null) {
+  await pool.execute(
+    `INSERT INTO chatbot_sessions (session_id, user_id)
+     VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE user_id = COALESCE(VALUES(user_id), user_id)`,
+    [sessionId, userId]
+  );
+}
+
+export async function saveChatTurn(sessionId, userMessage, botMessage, userId = null) {
+  try {
+    await ensureDbSession(sessionId, userId);
+    await pool.execute(
+      "INSERT INTO chatbot_messages (session_id, sender, message) VALUES (?, 'USER', ?), (?, 'BOT', ?)",
+      [sessionId, userMessage, sessionId, botMessage || ""]
+    );
+  } catch (err) {
+    console.warn("[Chatbot Session] Không thể lưu MySQL chat log:", err.message);
   }
 }
 

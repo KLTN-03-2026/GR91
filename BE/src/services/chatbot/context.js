@@ -40,9 +40,55 @@ function inferBudgetLabel(nlu = {}) {
   return null;
 }
 
+function shouldClearRoomType(nluResult) {
+  const raw = String(nluResult?.rawText || "").toLowerCase();
+  return (
+    nluResult?.intent === "alternative" &&
+    !nluResult?.entities?.room_type &&
+    /(loại khác|hạng khác|kiểu khác|phòng khác|gợi ý khác|xem thêm)/.test(raw)
+  );
+}
+
+function getPriceAdjustment(nluResult, ctx = {}) {
+  const raw = String(nluResult?.rawText || "").toLowerCase();
+  const hasExplicitPrice = Boolean(nluResult?.entities?.min_price || nluResult?.entities?.max_price);
+  if (hasExplicitPrice) return null;
+
+  if (/(giá\s*)?(cao hơn|cao hơn nữa|đắt hơn|mắc hơn|xịn hơn|tốt hơn)/.test(raw)) {
+    const base = ctx.max_price || ctx.min_price;
+    return {
+      min_price: base || null,
+      max_price: null,
+      sort_by: "price_asc",
+      budget_label: "higher",
+    };
+  }
+
+  if (/(giá\s*)?(thấp hơn|rẻ hơn|rẻ hơn nữa|mềm hơn)/.test(raw)) {
+    const base = ctx.min_price || ctx.max_price;
+    return {
+      min_price: null,
+      max_price: base || null,
+      sort_by: "price_desc",
+      budget_label: "lower",
+    };
+  }
+
+  return null;
+}
+
 export async function updateContext(ctx, nluResult) {
   const nlu = nluResult?.entities || {};
   const merged = { ...defaultContext, ...(ctx || {}) };
+  const clearRoomType = shouldClearRoomType(nluResult);
+  const priceAdjustment = getPriceAdjustment(nluResult, merged);
+
+  if (clearRoomType) {
+    merged.room_type = null;
+    merged.room_type_id = null;
+    merged.room_type_name = null;
+    merged.capacity = null;
+  }
 
   if (nlu.room_type) {
     const rt = await mapRoomType(nlu.room_type);
@@ -76,13 +122,13 @@ export async function updateContext(ctx, nluResult) {
     Array.isArray(nlu.preferences) && nlu.preferences.length > 0
       ? [...new Set([...(merged.preferences || []), ...nlu.preferences])]
       : merged.preferences || [];
-  merged.min_price = nlu.min_price ?? merged.min_price;
-  merged.max_price = nlu.max_price ?? merged.max_price;
+  merged.min_price = priceAdjustment ? priceAdjustment.min_price : (nlu.min_price ?? merged.min_price);
+  merged.max_price = priceAdjustment ? priceAdjustment.max_price : (nlu.max_price ?? merged.max_price);
   merged.intent = nluResult?.intent ?? merged.intent;
-  merged.room_type = nlu.room_type ?? merged.room_type ?? merged.room_type_name;
-  merged.sort_by = nlu.sort_by ?? merged.sort_by;
+  merged.room_type = clearRoomType ? null : (nlu.room_type ?? merged.room_type ?? merged.room_type_name);
+  merged.sort_by = priceAdjustment?.sort_by ?? nlu.sort_by ?? merged.sort_by;
   merged.last_query = nluResult?.rawText?.trim?.() || merged.last_query;
-  merged.budget_label = inferBudgetLabel(nlu) ?? merged.budget_label;
+  merged.budget_label = priceAdjustment?.budget_label ?? inferBudgetLabel(nlu) ?? merged.budget_label;
   if (merged.checkin && merged.checkout) {
     merged.nights = diffNights(merged.checkin, merged.checkout);
   }
