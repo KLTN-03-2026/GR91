@@ -96,16 +96,34 @@ statsRouter.get('/analytics', requireAuth, requireAdmin, async (_req: AuthReques
       filterMsgClause = " AND sent_at BETWEEN ? AND ?";
     }
 
-    // 1. Doanh thu 12 tháng (Thanh toán thành công) - Luôn hiển thị năm hiện tại để xem xu hướng
-    const [revenueByMonth] = await conn.execute(`
-      SELECT 
-        MONTH(transaction_date) as month,
-        SUM(amount) as total
-      FROM payment_transactions
-      WHERE status = 'SUCCESS' AND YEAR(transaction_date) = ?
-      GROUP BY MONTH(transaction_date)
-      ORDER BY month ASC
-    `, [currentYear]) as any[];
+    // 1. Doanh thu (Thanh toán thành công)
+    let revenueQuery = "";
+    let revenueParams: any[] = [];
+    
+    if (start_date && end_date) {
+      revenueQuery = `
+        SELECT 
+          DATE_FORMAT(transaction_date, '%d/%m') as label,
+          SUM(amount) as total
+        FROM payment_transactions
+        WHERE status = 'SUCCESS' AND transaction_date BETWEEN ? AND ?
+        GROUP BY label
+        ORDER BY MIN(transaction_date) ASC
+      `;
+      revenueParams = [start_date + ' 00:00:00', end_date + ' 23:59:59'];
+    } else {
+      revenueQuery = `
+        SELECT 
+          MONTH(transaction_date) as label,
+          SUM(amount) as total
+        FROM payment_transactions
+        WHERE status = 'SUCCESS' AND YEAR(transaction_date) = ?
+        GROUP BY MONTH(transaction_date)
+        ORDER BY label ASC
+      `;
+      revenueParams = [currentYear];
+    }
+    const [revenueData] = await conn.execute(revenueQuery, revenueParams) as any[];
 
     // 2. Tỷ lệ trạng thái Booking (Áp dụng Filter)
     const [bookingStatus] = await conn.execute(`
@@ -129,6 +147,32 @@ statsRouter.get('/analytics', requireAuth, requireAdmin, async (_req: AuthReques
     `, filterParams) as any[];
 
     // 4. Tỷ lệ lấp đầy, Thống kê AI, Tăng trưởng & Khách mới
+    
+    // Tính kỳ trước để so sánh tăng trưởng
+    let prevFilterClause = "DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+    let prevParams: any[] = [];
+    let currentFilterClause = "DATE(created_at) = CURDATE()";
+    let currentParams: any[] = [];
+
+    if (start_date && end_date) {
+       const start = new Date(String(start_date));
+       const end = new Date(String(end_date));
+       const diffTime = Math.abs(end.getTime() - start.getTime());
+       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+       
+       const prevStart = new Date(start.getTime() - diffDays * 24 * 60 * 60 * 1000);
+       const prevEnd = new Date(end.getTime() - diffDays * 24 * 60 * 60 * 1000);
+       
+       const psStr = prevStart.toISOString().split('T')[0] + ' 00:00:00';
+       const peStr = prevEnd.toISOString().split('T')[0] + ' 23:59:59';
+       
+       prevFilterClause = "created_at BETWEEN ? AND ?";
+       prevParams = [psStr, peStr];
+
+       currentFilterClause = "created_at BETWEEN ? AND ?";
+       currentParams = [start_date + ' 00:00:00', end_date + ' 23:59:59'];
+    }
+
     const [misc] = await conn.execute(`
       SELECT 
         (SELECT COUNT(*) FROM rooms WHERE status = 'ACTIVE') as activeRooms,
@@ -143,23 +187,33 @@ statsRouter.get('/analytics', requireAuth, requireAdmin, async (_req: AuthReques
            WHERE r.role_name = 'ADMIN'
          )
         ) as newUsersToday,
-        (SELECT COUNT(*) FROM bookings WHERE DATE(created_at) = CURDATE()) as bookingsToday,
-        (SELECT COUNT(*) FROM bookings WHERE DATE(created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)) as bookingsYesterday
+        (SELECT COUNT(*) FROM bookings WHERE ${currentFilterClause}) as bookingsCurrent,
+        (SELECT COUNT(*) FROM bookings WHERE ${prevFilterClause}) as bookingsPrevious
       FROM DUAL
-    `, [today, ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : []), ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : []), ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : [])]) as any[];
+    `, [today, ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : []), ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : []), ...(start_date && end_date ? [start_date + ' 00:00:00', end_date + ' 23:59:59'] : []), ...currentParams, ...prevParams]) as any[];
 
-    const bToday = Number(misc[0].bookingsToday);
-    const bYesterday = Number(misc[0].bookingsYesterday);
-    const growth = bYesterday > 0 ? Math.round(((bToday - bYesterday) / bYesterday) * 100) : (bToday > 0 ? 100 : 0);
+    const bCurrent = Number(misc[0].bookingsCurrent);
+    const bPrev = Number(misc[0].bookingsPrevious);
+    const growth = bPrev > 0 ? Math.round(((bCurrent - bPrev) / bPrev) * 100) : (bCurrent > 0 ? 100 : 0);
+
+    let mappedRevenue;
+    if (start_date && end_date) {
+      mappedRevenue = revenueData.map((d: any) => ({
+        month: d.label,
+        revenue: Number(d.total)
+      }));
+    } else {
+      mappedRevenue = Array.from({ length: 12 }, (_, i) => {
+        const monthData = revenueData.find((m: any) => Number(m.label) === i + 1);
+        return { month: `T${i + 1}`, revenue: monthData ? Number(monthData.total) : 0 };
+      });
+    }
 
     res.json({
       success: true,
       data: {
-        revenueByMonth: Array.from({ length: 12 }, (_, i) => {
-          const monthData = revenueByMonth.find(m => m.month === i + 1);
-          return { month: `T${i + 1}`, revenue: monthData ? Number(monthData.total) : 0 };
-        }),
-        bookingStatus: bookingStatus.map(s => {
+        revenueByMonth: mappedRevenue,
+        bookingStatus: bookingStatus.map((s: any) => {
           let name = s.status;
           if (name === 'PENDING') name = 'Chờ xử lý';
           if (name === 'CONFIRMED') name = 'Đã xác nhận';
@@ -167,7 +221,7 @@ statsRouter.get('/analytics', requireAuth, requireAdmin, async (_req: AuthReques
           if (name === 'CANCELLED') name = 'Đã hủy';
           return { name, value: Number(s.count) };
         }),
-        topRoomTypes: topRooms.map(r => ({ name: r.name, value: Number(r.count) })),
+        topRoomTypes: topRooms.map((r: any) => ({ name: r.name, value: Number(r.count) })),
         occupancy: {
           total: Number(misc[0].activeRooms),
           occupied: Number(misc[0].occupiedRooms),

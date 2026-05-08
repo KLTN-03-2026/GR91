@@ -230,14 +230,30 @@ export const searchRooms = tool(
       }
 
       // Wrap câu query để filter giá chính xác trên kết quả đã tính toán
-      let sql = `SELECT * FROM (${innerSql}) AS room_data`;
+      let sql = `SELECT *`;
+      if (people) {
+        sql += `, ABS(capacity - ${people}) AS capacity_diff`;
+      }
+      sql += ` FROM (${innerSql}) AS room_data`;
+      
       const paramsBeforePriceFilter = [...params];
       const whereParts = [];
       if (min_price) { whereParts.push("final_price >= ?"); params.push(min_price); }
       if (max_price) { whereParts.push("final_price <= ?"); params.push(max_price); }
       
       if (whereParts.length > 0) sql += " WHERE " + whereParts.join(" AND ");
-      sql += sort_by === "price_desc" ? " ORDER BY final_price DESC LIMIT 10" : " ORDER BY final_price ASC LIMIT 10";
+      
+      if (sort_by === "price_desc") {
+        sql += " ORDER BY final_price DESC LIMIT 10";
+      } else if (sort_by === "price_asc") {
+        sql += " ORDER BY final_price ASC LIMIT 10";
+      } else {
+        if (people) {
+          sql += " ORDER BY capacity_diff ASC, final_price ASC LIMIT 10";
+        } else {
+          sql += " ORDER BY final_price ASC LIMIT 10";
+        }
+      }
 
       const [rows] = await pool.execute(sql, params);
 
@@ -415,7 +431,4 @@ export const createBooking = tool(
   }
 );
 
-// createBooking is intentionally not exposed to the LLM agent.
-// Booking must go through the normal checkout flow so inventory locks,
-// payment policy, expiry and audit logs stay consistent.
-export const tools = [searchRooms, getRoomPrice, getBooking];
+export const tools = [searchRooms, getRoomPrice, getBooking, createBooking];

@@ -240,7 +240,7 @@ export const AdminBookings: React.FC = () => {
     const csv = [['Mã ĐP','Khách','Phòng','Loại','Ngày đặt','Check-in','Check-out','Trạng thái','Tổng tiền'], ...rows]
       .map((r) => r.join(',')).join('\n');
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    a.href = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }));
     a.download = `bookings_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
   };
@@ -328,6 +328,8 @@ export const AdminBookings: React.FC = () => {
                 <th className="px-5 py-3">Check-in / out</th>
                 <th className="px-5 py-3">Trạng thái</th>
                 <th className="px-5 py-3">Tổng tiền</th>
+                <th className="px-5 py-3">Đã thanh toán</th>
+                <th className="px-5 py-3">Còn lại</th>
                 <th className="px-5 py-3">Thao tác nhanh</th>
                 <th className="px-5 py-3 text-right">Chi tiết</th>
               </tr>
@@ -357,6 +359,8 @@ export const AdminBookings: React.FC = () => {
                   </td>
                   <td className="px-5 py-4"><StatusBadge status={b.status} /></td>
                   <td className="px-5 py-4 text-sm font-bold text-gray-900">{formatVND(b.total_price)}</td>
+                  <td className="px-5 py-4 text-sm font-medium text-green-600">{formatVND(b.paid_amount ?? 0)}</td>
+                  <td className="px-5 py-4 text-sm font-medium text-orange-600">{formatVND(b.remaining_amount ?? Math.max(0, b.total_price - (b.paid_amount ?? 0)))}</td>
                   <td className="px-5 py-4">
                     <div className="flex gap-2">
                       {b.status === 'CONFIRMED' && b.room_status !== 'MAINTENANCE' && (

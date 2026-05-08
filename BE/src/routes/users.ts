@@ -5,6 +5,9 @@ import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth.js';
 
 export const userRouter = Router();
 
+// Regex số điện thoại Việt Nam
+const phoneRegex = /^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$/;
+
 // Helper: lấy role của user
 async function getUserRole(userId: number | string): Promise<string | null> {
   const conn = await pool.getConnection();
@@ -101,6 +104,11 @@ userRouter.patch('/:id', requireAuth, async (req: AuthRequest, res: Response) =>
   }
 
   const { full_name, phone } = req.body;
+
+  // Validate phone nếu có nhập
+  if (phone && !phoneRegex.test(String(phone).replace(/\s/g, '')))
+    return res.status(400).json({ error: 'Số điện thoại không hợp lệ. Vui lòng nhập đúng định dạng Việt Nam (VD: 0901234567)' });
+
   const conn = await pool.getConnection();
   try {
     await conn.execute(

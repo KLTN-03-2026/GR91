@@ -3,20 +3,29 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Building2, Mail, Lock, User, Phone, AtSign } from 'lucide-react';
 import { authApi } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { isValidPhone, PHONE_ERROR_MSG } from '../lib/utils';
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
   const [form, setForm] = useState({ username: '', full_name: '', email: '', phone: '', password: '' });
   const [error, setError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
+    if (field === 'phone') setPhoneError('');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    // Validate phone nếu có nhập
+    if (form.phone && !isValidPhone(form.phone)) {
+      setPhoneError(PHONE_ERROR_MSG);
+      return;
+    }
     setLoading(true);
     try {
       const { token, user } = await authApi.register(form);
@@ -78,7 +87,25 @@ export const Register: React.FC = () => {
             {field('full_name', 'Họ và tên', 'text', 'Nguyễn Văn A', <User className="h-5 w-5" />)}
             {field('username', 'Tên đăng nhập', 'text', 'nguyenvana', <AtSign className="h-5 w-5" />)}
             {field('email', 'Địa chỉ Email', 'email', 'you@example.com', <Mail className="h-5 w-5" />, 'email')}
-            {field('phone', 'Số điện thoại', 'tel', '+84 123 456 789', <Phone className="h-5 w-5" />)}
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-gray-700">Số điện thoại</label>
+              <div className="mt-1 relative rounded-md shadow-sm">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <Phone className="h-5 w-5" />
+                </div>
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  value={form.phone}
+                  onChange={set('phone')}
+                  className={`focus:ring-blue-500 focus:border-blue-500 block w-full pl-10 sm:text-sm rounded-xl py-3 border outline-none ${phoneError ? 'border-red-400' : 'border-gray-300'}`}
+                  placeholder="VD: 0901234567"
+                />
+              </div>
+              {phoneError && <p className="mt-1 text-xs text-red-500">{phoneError}</p>}
+            </div>
             {field('password', 'Mật khẩu', 'password', '••••••••', <Lock className="h-5 w-5" />, 'new-password')}
 
             <div className="flex items-center">

@@ -31,8 +31,8 @@ function buildUnavailableRanges(rows: Array<{ date: string; status: string }>) {
       continue;
     }
 
-    const expectedNext = new Date(`${last.check_out}T00:00:00`);
-    expectedNext.setDate(expectedNext.getDate() + 1);
+    const expectedNext = new Date(`${last.check_out}T00:00:00Z`);
+    expectedNext.setUTCDate(expectedNext.getUTCDate() + 1);
     const nextDate = expectedNext.toISOString().split('T')[0];
 
     if (nextDate === row.date) {
@@ -48,8 +48,8 @@ function buildUnavailableRanges(rows: Array<{ date: string; status: string }>) {
   }
 
   return ranges.map((range) => {
-    const exclusive = new Date(`${range.check_out}T00:00:00`);
-    exclusive.setDate(exclusive.getDate() + 1);
+    const exclusive = new Date(`${range.check_out}T00:00:00Z`);
+    exclusive.setUTCDate(exclusive.getUTCDate() + 1);
     return {
       check_in: range.check_in,
       check_out: exclusive.toISOString().split('T')[0],
@@ -431,8 +431,34 @@ roomRouter.post('/admin/fix-images', requireAuth, requireAdmin, async (req: Auth
 // GET /api/rooms/admin/units-status?date=YYYY-MM-DD — trạng thái phòng theo ngày (admin)
 roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   const date = (req.query.date as string) || new Date().toISOString().split('T')[0];
+  
+  const next5DaysDate = new Date(date);
+  next5DaysDate.setDate(next5DaysDate.getDate() + 5);
+  const next5DaysDateStr = next5DaysDate.toISOString().split('T')[0];
+
   const conn = await pool.getConnection();
   try {
+    const [futureBookingsRows] = await conn.execute(`
+      SELECT br.room_id, br.check_in, br.check_out, u.full_name
+      FROM booking_rooms br
+      JOIN bookings b ON b.booking_id = br.booking_id
+      LEFT JOIN users u ON u.user_id = b.user_id
+      WHERE b.status IN ('CONFIRMED', 'PENDING', 'CHECKED_IN')
+        AND br.check_in < ?
+        AND br.check_out > ?
+    `, [next5DaysDateStr, date]) as any[];
+
+    const futureBookingsMap: Record<number, any[]> = {};
+    for (const row of futureBookingsRows as any[]) {
+      const roomId = row.room_id;
+      if (!futureBookingsMap[roomId]) futureBookingsMap[roomId] = [];
+      futureBookingsMap[roomId].push({
+        check_in: row.check_in instanceof Date ? row.check_in.toISOString().split('T')[0] : row.check_in,
+        check_out: row.check_out instanceof Date ? row.check_out.toISOString().split('T')[0] : row.check_out,
+        full_name: row.full_name,
+      });
+    }
+
     const [rows] = await conn.execute(`
       SELECT
         r.room_id,
@@ -448,7 +474,7 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
         MIN(ri.url)     AS first_image,
         -- Có booking active vào ngày này không?
         MAX(CASE
-          WHEN b.status IN ('CONFIRMED','PENDING')
+          WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN')
             AND br.check_in  <= ?
             AND br.check_out >  ?
           THEN 1 ELSE 0
@@ -460,11 +486,11 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
           THEN 1 ELSE 0
         END) AS is_cleaning,
         -- Thông tin booking hiện tại (active)
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in  END) AS booking_check_in,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out END) AS booking_check_out,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in_time  END) AS booking_check_in_time,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out_time END) AS booking_check_out_time,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING') AND br.check_in <= ? AND br.check_out > ? THEN b.booking_id END) AS active_booking_id
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in  END) AS booking_check_in,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out END) AS booking_check_out,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in_time  END) AS booking_check_in_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out_time END) AS booking_check_out_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN b.booking_id END) AS active_booking_id
       FROM rooms r
       JOIN room_types rt ON r.type_id = rt.type_id
       LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = ?
@@ -484,12 +510,12 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
       let display_status: string;
       if (r.db_status === 'MAINTENANCE') {
         display_status = 'MAINTENANCE';
-      } else if (r.db_status === 'CLEANING') {
-        display_status = 'CLEANING';
       } else if (r.db_status === 'INACTIVE') {
         display_status = 'INACTIVE';
       } else if (r.is_booked) {
         display_status = 'BOOKED';
+      } else if (r.db_status === 'CLEANING' || r.is_cleaning) {
+        display_status = 'CLEANING';
       } else {
         display_status = 'AVAILABLE';
       }
@@ -517,6 +543,7 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
           check_in_time:   r.booking_check_in_time  ?? '14:00',
           check_out_time:  r.booking_check_out_time ?? '11:00',
         } : null,
+        future_bookings: futureBookingsMap[r.room_id] || [],
       };
     }));
   } finally { conn.release(); }
@@ -854,7 +881,7 @@ roomRouter.get('/available', async (req: Request, res: Response) => {
                rt.type_id, rt.name, rt.base_price, rt.capacity, rt.description, rt.area_sqm, rc.name
       HAVING inventory_days >= ? AND available_days >= ? AND conflict_days = 0
       ORDER BY rt.base_price ASC, r.floor ASC
-    `, [nights, check_in, check_out, nights, nights]) as any[];
+    `, [nights, check_in as string, check_out as string, nights, nights]) as any[];
 
     res.json((rows as any[]).map((r: any) => ({
       room_id:              r.room_id,

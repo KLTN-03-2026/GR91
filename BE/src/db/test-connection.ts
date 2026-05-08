@@ -15,7 +15,7 @@ async function testConnection() {
     // Check if database exists
     const [dbs] = await conn.execute(
       `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?`,
-      [process.env.DB_NAME]
+      [process.env.DB_NAME || '']
     ) as any[];
     
     if (dbs.length > 0) {

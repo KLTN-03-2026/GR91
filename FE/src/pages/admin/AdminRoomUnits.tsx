@@ -91,9 +91,9 @@ function PriceTag({ eff, base }: { eff: number; base: number }) {
 
 // ─── Room Chip (grid mode) ────────────────────────────────────────────────────
 function RoomChip({
-  u, isOpen, onClick, isUpdated,
+  u, isOpen, onClick, isUpdated, date
 }: {
-  u: RoomDisplayUnit; isOpen: boolean; onClick: () => void; isUpdated: boolean;
+  u: RoomDisplayUnit; isOpen: boolean; onClick: () => void; isUpdated: boolean; date: string;
 }) {
   const cfg = DISPLAY_CFG[u.display_status];
 
@@ -103,42 +103,116 @@ function RoomChip({
     !remaining.includes('h') && !remaining.includes('Quá') &&
     Number(remaining.replace(' phút', '')) <= 60;
 
+  // Sinh 5 ngày tới
+  const timelineDates = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(date);
+    d.setDate(d.getDate() + i);
+    return d.toISOString().split('T')[0];
+  });
+
+  // Thông tin timeline
+  const timelineInfo = timelineDates.map(d => {
+    const booking = u.future_bookings?.find(b => b.check_in <= d && b.check_out > d);
+    return {
+      date: d,
+      booked: !!booking,
+      full_name: booking?.full_name || null,
+    };
+  });
+
+  // Tìm booking gần nhất trong tương lai (> date)
+  const upcomingBooking = u.future_bookings
+    ?.filter(b => b.check_in > date)
+    ?.sort((a, b) => new Date(a.check_in).getTime() - new Date(b.check_in).getTime())[0];
+
+  let upcomingBadge = null;
+  let hasUpcomingBorder = false;
+
+  if (upcomingBooking) {
+    const checkInDate = new Date(upcomingBooking.check_in);
+    const currentDateObj = new Date(date);
+    const diffDays = Math.round((checkInDate.getTime() - currentDateObj.getTime()) / 86400000);
+    const nights = Math.max(1, Math.round((new Date(upcomingBooking.check_out).getTime() - checkInDate.getTime()) / 86400000));
+    
+    if (diffDays === 1) {
+      upcomingBadge = `🔥 Mai có khách (${nights}N)`;
+    } else if (diffDays > 1 && diffDays <= 5) {
+      const formattedDate = checkInDate.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+      upcomingBadge = `📅 ${formattedDate} (${nights}N)`;
+    }
+    
+    if (u.display_status === 'AVAILABLE' && diffDays <= 5) {
+      hasUpcomingBorder = true;
+    }
+  }
+
   return (
-    <button
-      onClick={onClick}
-      className={`
-        relative flex flex-col items-start gap-1 px-3 py-2.5 rounded-xl border text-left
-        transition-all duration-200 select-none min-w-[88px]
-        ${isOpen
-          ? 'border-blue-400 bg-blue-50 text-blue-700 shadow-md ring-2 ring-blue-100'
-          : isSoonCheckout
-            ? 'border-red-300 bg-red-50 text-red-800 shadow-sm animate-pulse'
-            : `${cfg.tile} shadow-sm`
-        }
-        ${isUpdated ? 'ring-4 ring-yellow-400 border-yellow-400 bg-yellow-50 shadow-lg shadow-yellow-100 z-10 scale-105' : ''}
-      `}
-    >
-      {/* Room number + icon */}
-      <div className="flex items-center gap-1.5 w-full">
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isOpen ? 'bg-blue-400' : cfg.dot}`} />
-        <span className="text-sm font-bold leading-none">{u.room_number}</span>
-        {isSoonCheckout && (
-          <span className="ml-auto text-xs bg-red-500 text-white px-1.5 py-0.5 rounded-full font-semibold leading-none">Sắp trả</span>
-        )}
-      </div>
-      {/* Status label */}
-      <span className="text-xs opacity-75 leading-none pl-0.5">{cfg.label}</span>
-      {/* Booking time (nếu có khách) */}
-      {u.booking && (
-        <div className="text-xs font-mono leading-none pl-0.5 flex items-center gap-1 opacity-80">
-          <LogIn className="h-3 w-3" />
-          <span>{u.booking.check_in_time}</span>
-          <span className="opacity-40">·</span>
-          <LogOut className="h-3 w-3" />
-          <span>{u.booking.check_out_time}</span>
+    <div className="relative group">
+      <button
+        onClick={onClick}
+        className={`
+          relative flex flex-col items-start gap-1 px-3 py-2.5 rounded-xl border text-left
+          transition-all duration-200 select-none min-w-[96px]
+          ${isOpen
+            ? 'border-blue-400 bg-blue-50 text-blue-700 shadow-md ring-2 ring-blue-100'
+            : isSoonCheckout
+              ? 'border-red-300 bg-red-50 text-red-800 shadow-sm animate-pulse'
+              : hasUpcomingBorder
+                ? 'border-purple-300 bg-purple-50/60 text-purple-800 hover:bg-purple-100/80 shadow-sm'
+                : `${cfg.tile} shadow-sm`
+          }
+          ${isUpdated ? 'ring-4 ring-yellow-400 border-yellow-400 bg-yellow-50 shadow-lg shadow-yellow-100 z-10 scale-105' : ''}
+        `}
+      >
+        {/* Room number + icon */}
+        <div className="flex items-center gap-1.5 w-full">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isOpen ? 'bg-blue-400' : hasUpcomingBorder ? 'bg-purple-400' : cfg.dot}`} />
+          <span className="text-sm font-bold leading-none">{u.room_number}</span>
+          {isSoonCheckout && (
+            <span className="ml-auto text-xs bg-red-500 text-white px-1.5 py-0.5 rounded-full font-semibold leading-none">Sắp trả</span>
+          )}
         </div>
-      )}
-    </button>
+        
+        {/* Status label / Upcoming Badge */}
+        {upcomingBadge && !isOpen ? (
+          <span className="text-[11px] font-semibold text-purple-700 leading-none mt-0.5">{upcomingBadge}</span>
+        ) : (
+          <span className="text-[11px] opacity-75 leading-none mt-0.5">{cfg.label}</span>
+        )}
+        
+        {/* Booking time (nếu có khách) */}
+        {u.booking && (
+          <div className="text-[10px] font-mono leading-none flex items-center gap-1 opacity-80 mt-1">
+            <LogIn className="h-2.5 w-2.5" />
+            <span>{u.booking.check_in_time}</span>
+            <span className="opacity-40">-</span>
+            <LogOut className="h-2.5 w-2.5" />
+            <span>{u.booking.check_out_time}</span>
+          </div>
+        )}
+
+        {/* Mini timeline */}
+        <div className="flex gap-1 mt-1.5 opacity-80">
+          {timelineInfo.map((t, idx) => (
+             <div key={idx} className={`w-3.5 h-1.5 rounded-sm ${t.booked ? (hasUpcomingBorder ? 'bg-purple-400' : 'bg-gray-400') : 'border border-gray-300 bg-transparent'}`} />
+          ))}
+        </div>
+      </button>
+
+      {/* Tooltip */}
+      <div className="absolute opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-[11px] rounded-lg py-2 px-3 bottom-full left-1/2 -translate-x-1/2 mb-2 pointer-events-none w-max z-[60] shadow-xl">
+        <p className="font-bold border-b border-gray-700 pb-1 mb-1.5 text-gray-200">Lịch 5 ngày tới</p>
+        <div className="space-y-1">
+          {timelineInfo.map((t, idx) => (
+            <div key={idx} className="flex gap-4 justify-between items-center">
+              <span className="text-gray-400">{new Date(t.date).toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})}</span>
+              <span className={t.booked ? 'text-amber-300 font-medium max-w-[120px] truncate' : 'text-emerald-400'}>{t.booked ? (t.full_name || 'Đã đặt') : 'Trống'}</span>
+            </div>
+          ))}
+        </div>
+        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
+      </div>
+    </div>
   );
 }
 
@@ -594,6 +668,7 @@ export const AdminRoomUnits: React.FC = () => {
                           isOpen={isOpen}
                           onClick={() => setExpandedId(isOpen ? null : u.room_id)}
                           isUpdated={updatedIds.has(u.room_id)}
+                          date={date}
                         />
                         {isOpen && (
                           <RoomPopover u={u} onClose={() => setExpandedId(null)} {...pp} />

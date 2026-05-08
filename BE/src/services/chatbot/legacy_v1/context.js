@@ -79,7 +79,8 @@ function getPriceAdjustment(nluResult, ctx = {}) {
 
 export async function updateContext(ctx, nluResult) {
   const nlu = nluResult?.entities || {};
-  const merged = { ...defaultContext, ...(ctx || {}) };
+  let merged = { ...defaultContext, ...(ctx || {}) };
+
   const clearRoomType = shouldClearRoomType(nluResult);
   const priceAdjustment = getPriceAdjustment(nluResult, merged);
 
@@ -90,12 +91,10 @@ export async function updateContext(ctx, nluResult) {
     merged.capacity = null;
   }
 
-  if (nlu.room_type) {
-    const rt = await mapRoomType(nlu.room_type);
-    if (rt) {
-      merged.room_type_id = rt.type_id;
-      merged.room_type_name = rt.name;
-      merged.capacity = rt.capacity ?? merged.capacity;
+  // 1. Merge input mới trực tiếp (trừ các key cần xử lý qua rule)
+  for (let key in nlu) {
+    if (nlu[key] !== null && nlu[key] !== undefined && key !== 'room_type' && key !== 'people' && key !== 'amenities') {
+      merged[key] = nlu[key];
     }
   }
 
@@ -106,26 +105,57 @@ export async function updateContext(ctx, nluResult) {
     merged.amenities = [...new Set([...(merged.amenities || []), ...nlu.amenities])];
   }
 
-  merged.people = nlu.people ?? merged.people;
-  merged.checkin = nlu.checkin ?? merged.checkin;
-  merged.checkout = nlu.checkout ?? merged.checkout;
-  merged.floor = nlu.floor ?? merged.floor;
-  merged.floor_preference = nlu.floor_preference ?? merged.floor_preference;
+  // 2. RULE: room_type → people
+  if (nlu.room_type) {
+    const rt = await mapRoomType(nlu.room_type);
+    if (rt) {
+      merged.room_type_id = rt.type_id;
+      merged.room_type_name = rt.name;
+      merged.capacity = rt.capacity ?? merged.capacity;
+      merged.room_type = nlu.room_type; // Cập nhật room type
+      
+      // Override số người nếu user đổi room_type mà không kèm số người mới
+      if (!nlu.people) {
+        if (nlu.room_type === "Single" || rt.name.includes("Single")) merged.people = 1;
+        else if (nlu.room_type === "Double" || rt.name.includes("Double")) merged.people = 2;
+        else if (nlu.room_type === "Family" || rt.name.includes("Family")) merged.people = 4;
+        else if (rt.capacity) merged.people = rt.capacity;
+      }
+    }
+  }
+
+  // 3. RULE: Nếu user nói số người → clear room_type nếu mâu thuẫn
+  if (nlu.people) {
+    merged.people = nlu.people; // Luôn ưu tiên số người mới nhất
+    if (
+      (nlu.people === 1 && merged.room_type !== "Single" && !String(merged.room_type_name).includes("Single")) ||
+      (nlu.people === 2 && merged.room_type !== "Double" && !String(merged.room_type_name).includes("Double")) ||
+      (nlu.people >= 4 && merged.room_type !== "Family" && !String(merged.room_type_name).includes("Family"))
+    ) {
+      merged.room_type = null;
+      merged.room_type_id = null;
+      merged.room_type_name = null;
+      merged.capacity = null;
+    }
+  }
+
   if (nlu.sort_by) {
-    merged.sort_by = nlu.sort_by;
-    merged.room_type = nlu.room_type ?? null;
-    merged.room_type_id = nlu.room_type ? merged.room_type_id : null;
-    merged.room_type_name = nlu.room_type ? merged.room_type_name : null;
     merged.preferences = (merged.preferences || []).filter((pref) => !["budget", "best_value"].includes(pref));
   }
+  
   merged.preferences =
     Array.isArray(nlu.preferences) && nlu.preferences.length > 0
       ? [...new Set([...(merged.preferences || []), ...nlu.preferences])]
       : merged.preferences || [];
+      
   merged.min_price = priceAdjustment ? priceAdjustment.min_price : (nlu.min_price ?? merged.min_price);
   merged.max_price = priceAdjustment ? priceAdjustment.max_price : (nlu.max_price ?? merged.max_price);
   merged.intent = nluResult?.intent ?? merged.intent;
-  merged.room_type = clearRoomType ? null : (nlu.room_type ?? merged.room_type ?? merged.room_type_name);
+  
+  if (!clearRoomType && !merged.room_type && merged.room_type_name) {
+    merged.room_type = merged.room_type_name;
+  }
+  
   merged.sort_by = priceAdjustment?.sort_by ?? nlu.sort_by ?? merged.sort_by;
   merged.last_query = nluResult?.rawText?.trim?.() || merged.last_query;
   merged.budget_label = priceAdjustment?.budget_label ?? inferBudgetLabel(nlu) ?? merged.budget_label;

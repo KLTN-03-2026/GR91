@@ -11,7 +11,7 @@ import { SYSTEM_PROMPT, INTENT_PROMPT } from "./prompt.js";
 import { retrieveContext } from "./knowledge.js";
 import { analyzeInput } from "./nlu.js";
 import { updateContext } from "./context.js";
-import { getContext, getHistory, saveChatTurn, saveContext, saveHistory } from "./session.js";
+import { getContext, getHistory, saveContext, saveHistory } from "./session.js";
 
 // ── Tạo ReAct Agent với tool binding ─────────────────────────────────────────
 const agent = createReactAgent({
@@ -144,7 +144,6 @@ export async function runAgent(input, options = {}) {
     ];
     await saveContext(sessionId, mergedContext);
     await saveHistory(sessionId, nextHistory);
-    await saveChatTurn(sessionId, messageText, result.text || "", opts.userId ?? null);
     return result;
   };
 
@@ -187,13 +186,6 @@ export async function runAgent(input, options = {}) {
 
       return finish({
         text: `${await getRoomAmenitiesInfo({ room_type: mergedContext.room_type })}\n\n${await getHotelAmenitiesInfo()}`,
-        rooms: [],
-      });
-    }
-
-    if (nluResult.intent === "book" && !mergedContext.people && !mergedContext.checkin && !mergedContext.checkout) {
-      return finish({
-        text: "Để đặt phòng an toàn, anh/chị vui lòng mở phòng muốn đặt bằng nút \"Xem chi tiết\", chọn ngày nhận/trả phòng rồi tiếp tục thanh toán ở trang checkout. Em không tự tạo booking trực tiếp để tránh giữ phòng hoặc tính thanh toán sai.",
         rooms: [],
       });
     }

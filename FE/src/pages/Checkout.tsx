@@ -8,7 +8,7 @@ import { Input, Select } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { useToast } from '../components/ui/Toast';
-import { formatVND, formatDate } from '../lib/utils';
+import { formatVND, formatDate, isValidPhone, PHONE_ERROR_MSG } from '../lib/utils';
 import { COUNTRIES } from '../lib/constants';
 import { bookingApi } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -142,6 +142,7 @@ export const Checkout: React.FC = () => {
   // ── Step 1: guest info ──
   const [fullName, setFullName] = useState(user?.full_name ?? '');
   const [phone,    setPhone]    = useState(user?.phone ?? '');
+  const [phoneError, setPhoneError] = useState('');
   const [country,  setCountry]  = useState('Việt Nam');
   const [special,  setSpecial]  = useState('');
 
@@ -206,6 +207,11 @@ export const Checkout: React.FC = () => {
   const handleCreateBooking = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!room_id) { setError('Thiếu thông tin phòng'); return; }
+    if (!isValidPhone(phone)) {
+      setPhoneError(PHONE_ERROR_MSG);
+      return;
+    }
+    setPhoneError('');
     setLoading(true);
     setError('');
     try {
@@ -356,8 +362,9 @@ export const Checkout: React.FC = () => {
                       type="tel"
                       required
                       value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+84 123 456 789"
+                      onChange={(e) => { setPhone(e.target.value); setPhoneError(''); }}
+                      placeholder="VD: 0901234567"
+                      error={phoneError}
                     />
                     <Select
                       label="Quốc gia"

@@ -558,6 +558,16 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
   if (new Date(check_in) >= new Date(check_out))
     return res.status(400).json({ success: false, message: 'Ngày nhận phòng phải trước ngày trả phòng', code: 'INVALID_DATES' });
 
+  // Validate phone của guest nếu có
+  const phoneRegex = /^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$/;
+  if (Array.isArray(guests)) {
+    for (const g of guests) {
+      if (g.phone && !phoneRegex.test(String(g.phone).replace(/\s/g, ''))) {
+        return res.status(400).json({ success: false, message: 'Số điện thoại không hợp lệ. Vui lòng nhập đúng định dạng Việt Nam (VD: 0901234567)', code: 'INVALID_PHONE' });
+      }
+    }
+  }
+
   const conn = await pool.getConnection();
   await conn.beginTransaction();
   try {
@@ -586,41 +596,39 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
     const hasInventory = inv.length > 0;
 
     // 3. Kiểm tra availability dựa trên inventory đã lock
-    if (hasInventory) {
-      const conflictedDays = inv.filter((r: any) => ['BOOKED', 'PENDING', 'BLOCKED'].includes(String(r.status)));
-      if (conflictedDays.length > 0 || inv.length < nights) {
-        await conn.rollback();
-        return res.status(409).json({
-          success: false,
-          message: 'Selected dates are not available',
-          code: 'ROOM_NOT_AVAILABLE',
-        });
-      }
-    } else {
-      // Không có inventory → fallback: kiểm tra conflict qua booking_rooms
-      const [conflict] = await conn.execute(`
-        SELECT 1 FROM booking_rooms br
-        JOIN bookings b ON b.booking_id = br.booking_id
-        WHERE br.room_id = ?
-          AND b.status NOT IN ('CANCELLED')
-          AND br.check_in < ? AND br.check_out > ?
-        LIMIT 1
-      `, [room_id, check_out, check_in]) as any[];
+    const conflictedDays = inv.filter((r: any) => ['BOOKED', 'PENDING', 'BLOCKED'].includes(String(r.status)));
+    if (conflictedDays.length > 0) {
+      await conn.rollback();
+      return res.status(409).json({
+        success: false,
+        message: 'Selected dates are not available',
+        code: 'ROOM_NOT_AVAILABLE',
+      });
+    }
 
-      if ((conflict as any[]).length > 0) {
-        await conn.rollback();
-        return res.status(409).json({
-          success: false,
-          message: 'Selected dates are not available',
-          code: 'ROOM_NOT_AVAILABLE',
-        });
-      }
+    // Luôn fallback: kiểm tra conflict qua booking_rooms (dự phòng cho những ngày chưa có trong inventory)
+    const [conflict] = await conn.execute(`
+      SELECT 1 FROM booking_rooms br
+      JOIN bookings b ON b.booking_id = br.booking_id
+      WHERE br.room_id = ?
+        AND b.status NOT IN ('CANCELLED')
+        AND br.check_in < ? AND br.check_out > ?
+      LIMIT 1
+    `, [room_id, check_out, check_in]) as any[];
+
+    if ((conflict as any[]).length > 0) {
+      await conn.rollback();
+      return res.status(409).json({
+        success: false,
+        message: 'Selected dates are not available',
+        code: 'ROOM_NOT_AVAILABLE',
+      });
     }
 
     // 4. Tính giá: ưu tiên từ room_inventory, fallback về base_price
-    const basePerNight = hasInventory
-      ? Math.round(inv.reduce((s: number, r: any) => s + Number(r.price || roomRows[0].base_price), 0) / inv.length)
-      : roomRows[0].base_price;
+    const totalInventoryPrice = inv.reduce((s: number, r: any) => s + Number(r.price || roomRows[0].base_price), 0);
+    const missingNights = Math.max(0, nights - inv.length);
+    const basePerNight = Math.round((totalInventoryPrice + missingNights * roomRows[0].base_price) / nights);
 
     const basePrice = basePerNight * nights;
     const earlyFee  = calcEarlyFee(check_in_time, basePerNight);

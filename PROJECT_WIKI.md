@@ -1038,3 +1038,229 @@ OTP:       123456
 ---
 
 *Cập nhật lần cuối: 2026-04-22*
+
+
+---
+
+# PHỤ LỤC: TÀI LIỆU AI CHATBOT
+
+# Tài liệu Chatbot SmartHotel
+
+## 1. Tổng quan
+
+Chatbot SmartHotel là trợ lý AI tích hợp trực tiếp vào giao diện web, hỗ trợ khách hàng tìm phòng, tra cứu giá, hỏi tiện ích, kiểm tra đặt phòng và giải đáp chính sách khách sạn bằng tiếng Việt.
+
+Hệ thống hoạt động dựa trên mô hình xử lý Hybrid (Lai) tối ưu hóa tốc độ và độ chính xác:
+- **Rule-based NLU**: Xử lý, bóc tách Entity (ngày, số người, giá, loại phòng, tiện ích) cực kỳ nhanh.
+- **State-machine Context**: Quản lý ngữ cảnh phiên hội thoại (session) thông minh, tự động thay thế và suy luận ý định người dùng (ví dụ: tự điều chỉnh số người khi đổi loại phòng).
+- **Direct DB Query**: Truy vấn SQL tối ưu để kiểm tra tình trạng phòng thực tế, giá tiền và tiện ích.
+- **LangGraph ReAct Agent (LLM)**: Được sử dụng như bộ xử lý tổng quát (fallback) đối với những câu hỏi phức tạp hoặc cần lập luận, tra cứu booking.
+- **Knowledge Base Static**: Xử lý nhanh các câu hỏi FAQ và chính sách khách sạn qua Regex / Retrieval.
+
+---
+
+## 2. Công nghệ sử dụng
+
+| Thành phần | Công nghệ |
+|---|---|
+| LLM cục bộ | Ollama model `llama3.2:3b` tại `localhost:11434` |
+| Agent framework | LangChain / LangGraph `@langchain/langgraph/prebuilt` `createReactAgent` |
+| Tool Schema | Zod |
+| Database | MySQL (`mysql2/promise`) |
+| Session Storage | Redis (với in-memory RAM fallback), TTL 2 giờ |
+| Backend | Node.js, Express.js + TypeScript |
+| Frontend | React + TypeScript (`ChatWidget`) |
+| API Client | `post()` helper trong `FE/src/lib/api.ts` |
+
+---
+
+## 3. Cấu trúc file
+
+```text
+BE/src/services/chatbot/
+├── agent.js       - Điều phối chính: nhận dạng intent, gọi NLU, xử lý context, định tuyến và gọi tool / Agent.
+├── tools.js       - Chứa các LangChain tools (search_rooms, get_room_price, get_booking, create_booking) và helper SQL (tiện ích).
+├── nlu.js         - NLU Engine: Parse tiếng Việt thành intent + entities (ngày, số người, giá tiền, tiện ích, phòng).
+├── knowledge.js   - Knowledge base (FAQ/Chính sách) xử lý các câu hỏi tĩnh bằng Regex.
+├── context.js     - Quản lý logic ngữ cảnh: Cập nhật biến số, thay đổi tiêu chí ngân sách, xoá/thêm entity.
+├── session.js     - Giao tiếp Redis/RAM để lưu và đọc history + context theo sessionId.
+├── prompt.js      - Các System Prompts dành cho ReAct Agent và mô hình nhận diện Intent.
+├── date.js        - Các tiện ích tính toán và chuẩn hóa ngày tháng.
+└── db.js          - Khởi tạo kết nối MySQL pool và Ollama LLM client.
+
+BE/src/routes/
+└── chatbot.ts     - Định nghĩa API endpoint POST /api/chatbot/message.
+
+FE/src/components/features/
+└── ChatWidget.tsx - Floating chat UI + render text message và RoomCard inline.
+
+FE/src/lib/
+└── api.ts         - Khai báo chatbotApi.sendMessage()
+```
+
+---
+
+## 4. Luồng hoạt động tổng quát
+
+```text
+User nhập tin nhắn
+        |
+        v
+ChatWidget.tsx
+        |
+        | POST /api/chatbot/message { sessionId, message, context? }
+        v
+routes/chatbot.ts
+        |
+        | optionalAuth -> req.userId (nếu có đăng nhập)
+        | Gọi runAgent(message, { sessionId, context, userId })
+        v
+agent.js (Core Controller)
+        |
+        | 1. Lấy History và Context từ session.js
+        | 2. Gọi nlu.js để parse thông tin (analyzeInput)
+        | 3. Gọi context.js để merge thông tin mới vào Context cũ
+        | 4. Detect Intent: Dùng Regex (quickIntent) -> Fallback LLM (INTENT_PROMPT)
+        v
+Định tuyến theo Intent (Routing)
+        |
+        +-- Hỏi tiện ích (isAmenityQuestion) -> SQL query helper (tools.js) -> Trả về text / danh sách phòng.
+        +-- Hỏi FAQ/Chính sách (general_info, policy,...) -> knowledge.js -> Trả về câu trả lời tĩnh.
+        +-- Tìm phòng / Hỏi giá (ask_availability, ask_price, search, compare,...) 
+        |       -> Gọi trực tiếp tool 'searchRooms' (tools.js) không qua ReAct loop để tối ưu tốc độ.
+        +-- Tra cứu Booking (ask_booking) -> Đưa vào ReAct Agent để tự quyết định gọi tool 'get_booking'.
+        +-- Câu hỏi khác (other) -> Đưa vào ReAct Agent xử lý bằng LLM tổng quát.
+        |
+        v
+Lưu History & Context mới (session.js)
+        |
+        v
+API Response: { success, data: { message, rooms } }
+        |
+        v
+Frontend ChatWidget render Text + RoomCard (nếu mảng rooms > 0)
+```
+
+---
+
+## 5. Luồng NLU và Context (State Machine)
+
+### 5.1 NLU Engine (`nlu.js`)
+NLU nhận văn bản tiếng Việt và trích xuất thành danh sách Entity.
+- `intent`: `search`, `alternative`, `booking_info`, `facility`, `policy`, `support`, `compare`, `modify`, `cancel`, `payment`, v.v.
+- `people`, `children`: "2 người lớn", "1 bé 5 tuổi".
+- `checkin`, `checkout`: Nhận dạng tương đối ("ngày mai", "cuối tuần") hoặc tuyệt đối ("từ 15/5 đến 18/5"). Hỗ trợ tự động tính toán.
+- `room_type`: Family, Deluxe, Suite, Standard, v.v.
+- `min_price`, `max_price`: Xử lý giá tiền linh hoạt ("dưới 500k", "từ 700k đến 1tr5"). Tự động quy đổi sang VNĐ (k = 1000, tr = 1000000).
+- `amenities`: Nhận diện bồn tắm, ban công, hồ bơi, wifi, v.v.
+- `floor`, `floor_preference`: "tầng 3", "tầng cao", "tầng thấp".
+- `sort_by`: Sắp xếp "rẻ nhất", "đắt nhất".
+
+### 5.2 Context Logic (`context.js`)
+`context.js` sẽ kết hợp Entity mới lấy được từ NLU vào Context cũ của người dùng (lưu theo `sessionId`). 
+Các Rules xử lý ngữ cảnh thông minh:
+- **Chuyển đổi số người theo loại phòng**: Nếu user nói "phòng đôi", hệ thống tự hiểu `people = 2`. Nếu user thay đổi `room_type` nhưng không báo số lượng, context tự cập nhật số người tương ứng với loại phòng mới.
+- **Ghi đè hoặc mở rộng**: Nếu user đề cập số người khác, `room_type` sẽ bị xoá bỏ nếu gây mâu thuẫn sức chứa.
+- **Dịch chuyển ngân sách (Budget Shifts)**: 
+  - User nói "giá cao hơn nữa" -> Đổi `max_price` cũ thành `min_price`, bỏ giới hạn trên, chuyển sang tìm "từ mức giá đó trở lên".
+  - User nói "rẻ hơn" -> Đổi `min_price` cũ thành `max_price`.
+- **Mở rộng tìm kiếm**: "Loại khác", "hạng khác" -> Bỏ filter `room_type` cũ để mở rộng phạm vi tìm kiếm.
+
+---
+
+## 6. Luồng Tìm phòng & Báo giá (`tools.js`)
+
+Đây là luồng quan trọng nhất, dùng `search_rooms` gọi trực tiếp vào Database.
+
+### 6.1 Logic tính giá 3 tầng (3-tier Pricing)
+Hệ thống lấy giá ưu tiên từ cụ thể đến chung chung bằng hàm `COALESCE`:
+1. `room_prices.price` (Giá tuỳ chỉnh theo ngày cho từng phòng vật lý).
+2. `room_type_prices.price` (Giá tuỳ chỉnh theo ngày cho cả hạng phòng).
+3. `room_types.base_price` (Giá niêm yết mặc định).
+
+Luôn đảm bảo phòng có giá hợp lệ, nếu database lỗi giá = 0, fallback cứng về 500.000đ.
+
+### 6.2 Filter dữ liệu
+- Bỏ qua các phòng có trạng thái không phải `ACTIVE`.
+- Chặn các phòng đã có `booking_rooms` trùng lặp với `checkin`, `checkout`.
+- Lọc theo `capacity >= people`.
+- Lọc theo `room_type`, `floor`, `min_price`, `max_price`.
+- Sắp xếp ưu tiên độ chênh lệch số người `capacity_diff ASC`, rồi đến `final_price ASC` (hoặc DESC theo lệnh user).
+
+### 6.3 Thuật toán Fallback "Nearest Match"
+Nếu người dùng cung cấp mức ngân sách (vd: `max_price = 500000`) nhưng khách sạn không có phòng trống nào thoả mãn cả giá và ngày ở:
+- Hệ thống sẽ tạm bỏ qua filter giá, truy vấn lại Database để lấy 3 phòng rẻ nhất thoả mãn các tiêu chí còn lại.
+- Tool trả về flag `match = "nearest"`.
+- Agent sẽ sinh câu trả lời: *"Em chưa thấy phòng đúng mức dưới 500.000đ. Đây là vài lựa chọn gần nhất để anh/chị tham khảo:"* thay vì báo lỗi không có phòng.
+
+---
+
+## 7. Luồng Hỏi đáp Tiện ích
+
+Chặn ngay trong `agent.js` (không gọi LLM để tiết kiệm thời gian) khi phát hiện câu hỏi tiện ích:
+1. **Tiện ích khách sạn** ("Khách sạn có hồ bơi không?"): Gọi `getHotelAmenitiesInfo()` -> Truy vấn các tiện ích chung.
+2. **Tiện ích loại phòng** ("Trong phòng có gì?"): Gọi `getRoomAmenitiesInfo()` -> Truy vấn các tiện ích thông dụng trong hạng phòng hiện tại của Context.
+3. **Tiện ích phòng cụ thể** ("Phòng 106 có ban công không?"): Trích xuất `room_number = 106`, gọi `getRoomAmenitiesInfo({ room_number })`.
+4. **Tìm phòng theo tiện ích** ("Cho tôi xem phòng có bồn tắm"): Gọi `searchRoomsByAmenity()`, tìm trực tiếp các phòng vật lý chứa tiện ích đó và trả về `rooms[]` cho Frontend hiển thị.
+
+---
+
+## 8. Luồng ReAct Agent và Tool Calling
+
+Đối với các câu hỏi phức tạp hoặc cần tra cứu hệ thống nội bộ, ứng dụng chuyển quyền cho LLM qua ReAct Agent.
+
+- Agent sử dụng System Prompt (`prompt.js`) để quy định văn phong (lịch sự, xưng hô anh/chị - em, súc tích).
+- Agent được cung cấp các tool trong `tools.js` như:
+  - `get_booking`: Tìm thông tin đơn đặt phòng qua SĐT hoặc Mã đặt phòng.
+  - `get_room_price`: Tra cứu chính xác giá hiệu lực của một phòng cho một ngày cụ thể.
+  - `create_booking`: Tool legacy giúp booking trực tiếp (hiện ít dùng vì đã có luồng web booking chuyên dụng).
+- LLM sẽ tự quyết định tham số truyền vào tool và dịch kết quả tool thành ngôn ngữ tự nhiên.
+
+---
+
+## 9. API Endpoint
+
+```http
+POST /api/chatbot/message
+Authorization: optional (Bearer Token)
+```
+
+**Request:**
+```json
+{
+  "sessionId": "abc-123",
+  "message": "Có phòng đôi nào dưới 1 triệu ngày mai không?",
+  "context": {}
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Em tìm được 2 phòng phù hợp với yêu cầu của anh/chị (từ 06/05/2026 đến 07/05/2026, dưới 1.000.000đ):",
+    "rooms": [
+      {
+        "id": 105,
+        "name": "Standard Double Room (Phòng 105)",
+        "price": 850000,
+        "capacity": 2,
+        "image": "https://...",
+        "rating": 4.8,
+        "amenities": "Wifi, Điều hòa",
+        "description": "..."
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 10. Frontend ChatWidget
+- Hiển thị nút chat (Floating Action Button) bên góc phải màn hình.
+- Render message từ người dùng và bot.
+- Tự động hiển thị thẻ phòng (`RoomCard`) inline trên khung chat nếu API trả về mảng `rooms`. Card hiển thị Ảnh, Giá tiền, Tiện ích, Số người và Nút "Xem chi tiết" điều hướng thẳng vào trang thông tin phòng.
+- Có các "Quick Replies" (Gợi ý nhanh) để điều hướng các chức năng phổ biến (Tìm phòng trống, Giờ check-in...).
+- Quản lý trạng thái hộp thoại, Auto-scroll tới tin nhắn mới nhất và tạo hiệu ứng typing indicator mượt mà.

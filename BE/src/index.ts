@@ -39,6 +39,58 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Da
 // Global error handler
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+// @ts-ignore
+import killPort from 'kill-port';
+
+async function startServer(port: number, retries = 5) {
+  try {
+    // Tự động dọn dẹp port lỗi (zombie) từ gốc trước khi chạy
+    await killPort(port);
+  } catch (err) {
+    // Không cần xử lý nếu port đang trống
+  }
+
+  const server = app.listen(port, () => {
+    console.log(`🚀 Server running on http://localhost:${port}`);
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      if (retries > 0) {
+        console.warn(`⏳ Port ${port} busy, retrying in 1s... (${retries} attempts left)`);
+        setTimeout(() => startServer(port, retries - 1), 1000);
+      } else {
+        console.error(`❌ Port ${port} is still in use after retries.`);
+        console.error(`   Run this to fix: npx kill-port ${port}`);
+        process.exit(1);
+      }
+    } else {
+      throw err;
+    }
+  });
+
+  // Graceful shutdown
+  function shutdown(signal: string) {
+    console.log(`\n[${signal}] Shutting down gracefully...`);
+    server.close(() => {
+      console.log('✅ Server closed.');
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 3000).unref();
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+  
+  // Bắt lỗi crash đột ngột để giải phóng port
+  process.on('uncaughtException', (err) => {
+    console.error('🔥 Uncaught Exception:', err);
+    shutdown('uncaughtException');
+  });
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥 Unhandled Rejection at:', promise, 'reason:', reason);
+    shutdown('unhandledRejection');
+  });
+}
+
+startServer(Number(PORT));

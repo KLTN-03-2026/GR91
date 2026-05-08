@@ -6,7 +6,7 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { useAuth } from '../lib/auth';
 import { userApi, type AuthUser } from '../lib/api';
-import { formatVND, formatDate } from '../lib/utils';
+import { formatVND, formatDate, isValidPhone, PHONE_ERROR_MSG } from '../lib/utils';
 
 export const Profile: React.FC = () => {
   const { user, login, token } = useAuth();
@@ -16,6 +16,7 @@ export const Profile: React.FC = () => {
 
   const [fullName, setFullName] = useState('');
   const [phone, setPhone]       = useState('');
+  const [phoneError, setPhoneError] = useState('');
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
   const [error, setError]       = useState('');
@@ -70,6 +71,11 @@ export const Profile: React.FC = () => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPhoneError('');
+    if (phone && !isValidPhone(phone)) {
+      setPhoneError(PHONE_ERROR_MSG);
+      return;
+    }
     setSaving(true); setError('');
     try {
       await userApi.update(user.userId, { full_name: fullName, phone });
@@ -215,9 +221,10 @@ export const Profile: React.FC = () => {
                     label="Số điện thoại"
                     type="tel"
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    onChange={(e) => { setPhone(e.target.value); setPhoneError(''); }}
                     icon={<Phone className="h-4 w-4" />}
                     placeholder="VD: 0901234567"
+                    error={phoneError}
                   />
                 </div>
 

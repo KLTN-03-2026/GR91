@@ -7,9 +7,9 @@ import { addDays, formatLocalDate, fromDayMonth, todayLocalDate } from "./date.j
 
 // ─── Từ điển ─────────────────────────────────────────────────────────────────
 const ROOM_TYPE_MAP = {
-  "phòng đôi": "đôi", "giường đôi": "đôi", "double": "đôi",
-  "phòng 2 người": "đôi", "couple": "đôi", "2 vợ chồng": "đôi",
-  "phòng đơn": "đơn", "giường đơn": "đơn", "single": "đơn", "phòng 1 người": "đơn",
+  "phòng đôi": "Double", "giường đôi": "Double", "double": "Double",
+  "phòng 2 người": "Double", "couple": "Double", "2 vợ chồng": "Double",
+  "phòng đơn": "Single", "giường đơn": "Single", "single": "Single", "phòng 1 người": "Single",
   "phòng gia đình": "Family", "family": "Family", "gia đình": "Family",
   "phòng suite": "Suite", "suite": "Suite", "phòng sang": "Suite", "cao cấp": "Suite",
   "phòng deluxe": "Deluxe", "deluxe": "Deluxe",
@@ -140,13 +140,13 @@ function parsePrice(text) {
   }
 
   // Dưới / tối đa
-  const maxMatch = cleanedForPrice.match(/(?:dưới|tối đa|không quá)\s*(\d+[\d.,]*)\s*(tr(?:iệu)?|k|nghìn|ngàn)?/i);
+  const maxMatch = cleanedForPrice.match(/(?:dưới|tối đa|không quá|rẻ hơn|thấp hơn)\s*(\d+[\d.,]*)\s*(tr(?:iệu)?|k|nghìn|ngàn)?/i);
   if (maxMatch) {
     return { max: parseMoneyAmount(maxMatch[1], maxMatch[2]) };
   }
 
   // Trên / từ (chỉ khi có đơn vị)
-  const minMatch = cleanedForPrice.match(/(?:trên|tối thiểu)\s*(\d+[\d.,]*)\s*(tr(?:iệu)?|k|nghìn|ngàn)/i);
+  const minMatch = cleanedForPrice.match(/(?:trên|tối thiểu|cao hơn|đắt hơn|mắc hơn|lớn hơn)\s*(\d+[\d.,]*)\s*(tr(?:iệu)?|k|nghìn|ngàn)?/i);
   if (minMatch) {
     return { min: parseMoneyAmount(minMatch[1], minMatch[2]) };
   }
@@ -222,8 +222,8 @@ function parseOneDate(text) {
     }
   }
 
-  // Chỉ có ngày trong tháng: "ngày 18", "18" (không có tháng/năm)
-  const dayOnly = lower.match(/(?:^|\s)(?:ngày\s*)?(\d{1,2})(?:\s|$)/);
+  // Chỉ có ngày trong tháng: "ngày 18", "mùng 4" (không có tháng/năm)
+  const dayOnly = lower.match(/(?:^|\s)(?:ngày|mùng)\s*(\d{1,2})(?:\s|$)/);
   if (dayOnly) {
     const day = parseInt(dayOnly[1], 10);
     if (day >= 1 && day <= 31) {
@@ -304,7 +304,7 @@ function parseDateRange(text) {
 
   // Range day-only: "từ ngày 18 đến ngày 19", "18 đến 19"
   const dayOnlyRange = lower.match(
-    /(?:từ\s*)?(?:ngày\s*)?(\d{1,2})(?![\/\-.])\s*(?:đến|tới|-)\s*(?:ngày\s*)?(\d{1,2})(?![\/\-.])/
+    /(?:từ\s*)?(?:ngày\s*)?(\d{1,2})(?![\/\-.])\s*(?:đến|tới|-)\s*(?:ngày\s*)?(\d{1,2})(?![\/\-.])(?!\s*(?:người|khách|đêm|ng\b|trẻ|em|bé|tuổi))/
   );
   if (dayOnlyRange) {
     const d1 = parseInt(dayOnlyRange[1], 10);
@@ -315,7 +315,7 @@ function parseDateRange(text) {
   }
 
   // Range ngắn: "16 đến 19", "16-19" (mặc định theo tháng/năm hiện tại)
-  const shortRange = lower.match(/(?:^|\s)(\d{1,2})\s*(?:đến|-)\s*(\d{1,2})(?:\s|$)/);
+  const shortRange = lower.match(/(?:^|\s)(\d{1,2})\s*(?:đến|-)\s*(\d{1,2})(?:\s|$)(?!(?:người|khách|đêm|ng\b|trẻ|em|bé|tuổi))/);
   if (shortRange) {
     const d1 = parseInt(shortRange[1], 10);
     const d2 = parseInt(shortRange[2], 10);

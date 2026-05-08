@@ -50,6 +50,30 @@ export const AdminInvoices: React.FC = () => {
     }
   };
 
+  const handleExport = () => {
+    if (invoices.length === 0) return;
+    const headers = ['Mã Booking', 'Khách hàng', 'Email', 'Ngày thanh toán', 'Cổng TT', 'Phương thức', 'Số tiền'];
+    const rows = invoices.map(inv => [
+      `#${inv.booking_id}`,
+      inv.full_name || 'Khách vãng lai',
+      inv.email || '',
+      formatDate(inv.transaction_date),
+      getGatewayLabel(inv.gateway),
+      inv.method,
+      inv.amount
+    ]);
+
+    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `invoices_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="space-y-8 pb-10">
       {/* Header */}
@@ -104,7 +128,10 @@ export const AdminInvoices: React.FC = () => {
         </Card>
         
         <div className="md:col-span-2 flex items-center justify-end">
-           <button className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-bold px-4 py-2 rounded-xl bg-white border border-gray-200 shadow-sm transition-all hover:shadow-md">
+           <button 
+             onClick={handleExport}
+             className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-bold px-4 py-2 rounded-xl bg-white border border-gray-200 shadow-sm transition-all hover:shadow-md"
+           >
               <Download size={16} /> Xuất báo cáo kế toán
            </button>
         </div>

@@ -1,7 +1,5 @@
 import { Router, Request, Response } from 'express';
-// @ts-ignore
 import { runAgent } from '../services/chatbot/agent.js';
-// @ts-ignore
 import { connectRedis } from '../services/chatbot/session.js';
 import { AuthRequest, optionalAuth } from '../middleware/auth.js';
 
@@ -19,7 +17,6 @@ chatbotRouter.post('/message', optionalAuth, async (req: AuthRequest, res: Respo
 
     const result = await runAgent(message, {
       sessionId: sessionId || 'default-session',
-      context,
       userId: req.userId,
     });
 

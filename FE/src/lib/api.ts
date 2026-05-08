@@ -351,6 +351,8 @@ export interface RoomDisplayUnit {
     check_in_time: string;     // HH:mm
     check_out_time: string;    // HH:mm
   } | null;
+  // Booking tương lai (trong 5 ngày tới)
+  future_bookings?: { check_in: string; check_out: string; full_name: string | null }[];
 }
 
 export const adminRoomApi = {

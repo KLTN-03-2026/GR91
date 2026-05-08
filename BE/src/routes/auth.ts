@@ -12,11 +12,18 @@ export const authRouter = Router();
 const SECRET = process.env.JWT_SECRET ?? 'dev_secret';
 const EXPIRES = process.env.JWT_EXPIRES_IN ?? '7d';
 
+// Regex số điện thoại Việt Nam (10 số hoặc dạng quốc tế +84/84)
+const phoneRegex = /^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$/;
+
 // ── PB02: Đăng ký ────────────────────────────────────────────────────────────
 authRouter.post('/register', async (req: Request, res: Response) => {
   const { username, full_name, email, phone, password } = req.body;
   if (!username || !email || !password || !full_name)
     return res.status(400).json({ error: 'Thiếu thông tin bắt buộc' });
+
+  // Validate phone nếu có nhập
+  if (phone && !phoneRegex.test(String(phone).replace(/\s/g, '')))
+    return res.status(400).json({ error: 'Số điện thoại không hợp lệ. Vui lòng nhập đúng định dạng Việt Nam (VD: 0901234567)' });
 
   const conn = await pool.getConnection();
   try {

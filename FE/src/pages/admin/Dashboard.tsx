@@ -66,7 +66,7 @@ export const Dashboard: React.FC = () => {
     ]);
 
     const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
@@ -86,7 +86,7 @@ export const Dashboard: React.FC = () => {
 
   const statCards = [
     { 
-      label: 'Doanh thu năm nay', 
+      label: query.start_date ? 'Doanh thu thực tế' : 'Doanh thu năm nay', 
       value: formatVND(analytics?.revenueByMonth.reduce((acc, m) => acc + m.revenue, 0) ?? 0), 
       trend: 'Tiền thực thu', 
       trendUp: true, 
@@ -107,7 +107,7 @@ export const Dashboard: React.FC = () => {
       trend: (
         <div className={`flex items-center gap-1 font-bold ${analytics && analytics.growth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
           {analytics && analytics.growth >= 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-          {Math.abs(analytics?.growth ?? 0)}% so với hôm qua
+          {Math.abs(analytics?.growth ?? 0)}% {query.start_date ? 'so với kỳ trước' : 'so với hôm qua'}
         </div>
       ), 
       trendUp: (analytics?.growth ?? 0) >= 0, 

@@ -5,7 +5,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { DateRangeFilter } from '../../components/admin/DateRangeFilter';
 import { userApi, type AuthUser, type ListQuery } from '../../lib/api';
-import { formatVND, formatDate } from '../../lib/utils';
+import { formatVND, formatDate, isValidPhone, PHONE_ERROR_MSG } from '../../lib/utils';
 
 export const AdminUsers: React.FC = () => {
   const [users, setUsers]     = useState<AuthUser[]>([]);
@@ -16,6 +16,7 @@ export const AdminUsers: React.FC = () => {
   // Edit State
   const [editing, setEditing]   = useState<AuthUser | null>(null);
   const [editForm, setEditForm] = useState({ full_name: '', phone: '' });
+  const [editPhoneError, setEditPhoneError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -45,11 +46,17 @@ export const AdminUsers: React.FC = () => {
   const startEdit = (u: AuthUser) => {
     setEditing(u);
     setEditForm({ full_name: u.full_name || '', phone: u.phone || '' });
+    setEditPhoneError('');
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editing) return;
+    if (editForm.phone && !isValidPhone(editForm.phone)) {
+      setEditPhoneError(PHONE_ERROR_MSG);
+      return;
+    }
+    setEditPhoneError('');
     setSubmitting(true);
     try {
       await userApi.update(editing.userId, editForm);
@@ -207,11 +214,13 @@ export const AdminUsers: React.FC = () => {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Số điện thoại</label>
                 <input 
-                  type="text" 
+                  type="tel" 
                   value={editForm.phone}
-                  onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  onChange={e => { setEditForm(p => ({ ...p, phone: e.target.value })); setEditPhoneError(''); }}
+                  placeholder="VD: 0901234567"
+                  className={`w-full border rounded-2xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all ${editPhoneError ? 'border-red-400' : 'border-gray-200'}`}
                 />
+                {editPhoneError && <p className="text-xs text-red-500 ml-1">{editPhoneError}</p>}
               </div>
               <div className="flex gap-3 pt-2">
                 <Button variant="ghost" className="flex-1 rounded-2xl" onClick={() => setEditing(null)}>Hủy</Button>

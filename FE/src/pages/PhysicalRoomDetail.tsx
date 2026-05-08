@@ -21,9 +21,21 @@ import {
 import { useAuth } from '../lib/auth';
 import { redirectToLogin } from '../lib/redirectToLogin';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const TODAY = new Date().toISOString().split('T')[0];
+function getLocalISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+const TODAY = getLocalISODate(new Date());
 const FALLBACK = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?w=1200';
+
+const TIME_OPTIONS = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2).toString().padStart(2, '0');
+  const m = i % 2 === 0 ? '00' : '30';
+  return `${h}:${m}`;
+});
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface PricingRule {
@@ -71,7 +83,7 @@ function addDays(dateStr: string, days: number): string {
     const next = new Date(`${dateStr}T00:00:00`);
     if (isNaN(next.getTime())) return dateStr;
     next.setDate(next.getDate() + days);
-    return next.toISOString().split('T')[0];
+    return getLocalISODate(next);
   } catch {
     return dateStr;
   }
@@ -94,7 +106,7 @@ function listCalendarDays(month: Date) {
     const date = new Date(start);
     date.setDate(start.getDate() + index);
     return {
-      key: date.toISOString().split('T')[0],
+      key: getLocalISODate(date),
       date,
       inMonth: date.getMonth() === month.getMonth(),
     };
@@ -980,15 +992,19 @@ export function PhysicalRoomDetail() {
                       <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
                         Giờ nhận {getFeeLabel(pricingRules, 'checkin', checkInTime) && <span className="text-amber-500 normal-case font-semibold">{getFeeLabel(pricingRules, 'checkin', checkInTime)}</span>}
                       </label>
-                      <input type="time" value={checkInTime} onChange={(e) => setCheckInTime(e.target.value)}
-                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
+                      <select value={checkInTime} onChange={(e) => setCheckInTime(e.target.value)}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white cursor-pointer appearance-none">
+                        {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">
                         Giờ trả {getFeeLabel(pricingRules, 'checkout', checkOutTime) && <span className="text-amber-500 normal-case font-semibold">{getFeeLabel(pricingRules, 'checkout', checkOutTime)}</span>}
                       </label>
-                      <input type="time" value={checkOutTime} onChange={(e) => setCheckOutTime(e.target.value)}
-                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
+                      <select value={checkOutTime} onChange={(e) => setCheckOutTime(e.target.value)}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white cursor-pointer appearance-none">
+                        {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
                     </div>
                   </div>
                 )}
