@@ -711,6 +711,184 @@ bookingRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /api/bookings/admin — admin tạo booking tại quầy/qua điện thoại
+// Tách riêng khỏi luồng khách để không ảnh hưởng hành vi đặt phòng hiện tại.
+// ─────────────────────────────────────────────────────────────────────────────
+bookingRouter.post('/admin', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  const {
+    room_id,
+    check_in,
+    check_out,
+    check_in_time,
+    check_out_time,
+    guest,
+    payment_mode = 'PAY_LATER',
+    deposit_percent = 30,
+  } = req.body;
+
+  if (!room_id || !check_in || !check_out || !guest?.full_name)
+    return res.status(400).json({ success: false, message: 'Thiếu thông tin đặt phòng', code: 'MISSING_FIELDS' });
+
+  if (new Date(check_in) >= new Date(check_out))
+    return res.status(400).json({ success: false, message: 'Ngày nhận phòng phải trước ngày trả phòng', code: 'INVALID_DATES' });
+
+  const phoneRegex = /^(\+84|84|0)(3|5|7|8|9)[0-9]{8}$/;
+  if (guest.phone && !phoneRegex.test(String(guest.phone).replace(/\s/g, ''))) {
+    return res.status(400).json({ success: false, message: 'Số điện thoại không hợp lệ. Vui lòng nhập đúng định dạng Việt Nam (VD: 0901234567)', code: 'INVALID_PHONE' });
+  }
+
+  const conn = await pool.getConnection();
+  await conn.beginTransaction();
+  try {
+    const [roomRows] = await conn.execute(`
+      SELECT r.room_id, rt.base_price
+      FROM rooms r
+      JOIN room_types rt ON r.type_id = rt.type_id
+      WHERE r.room_id = ? AND r.status = 'ACTIVE'
+    `, [room_id]) as any[];
+
+    if (!(roomRows as any[]).length) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'Phòng không tồn tại hoặc không hoạt động', code: 'ROOM_NOT_FOUND' });
+    }
+
+    const nights = calcNights(check_in, check_out);
+
+    const [invRows] = await conn.execute(`
+      SELECT inventory_id, date, status, price
+      FROM room_inventory
+      WHERE room_id = ? AND date >= ? AND date < ?
+      FOR UPDATE
+    `, [room_id, check_in, check_out]) as any[];
+
+    const inv = invRows as any[];
+    const conflictedDays = inv.filter((r: any) => ['BOOKED', 'PENDING', 'BLOCKED'].includes(String(r.status)));
+    if (conflictedDays.length > 0) {
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: 'Phòng đã có booking trong khoảng ngày này', code: 'ROOM_NOT_AVAILABLE' });
+    }
+
+    const [conflict] = await conn.execute(`
+      SELECT 1 FROM booking_rooms br
+      JOIN bookings b ON b.booking_id = br.booking_id
+      WHERE br.room_id = ?
+        AND b.status NOT IN ('CANCELLED')
+        AND br.check_in < ? AND br.check_out > ?
+      LIMIT 1
+    `, [room_id, check_out, check_in]) as any[];
+
+    if ((conflict as any[]).length > 0) {
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: 'Phòng đã có booking trong khoảng ngày này', code: 'ROOM_NOT_AVAILABLE' });
+    }
+
+    let userId: number | null = null;
+    if (guest.email || guest.phone) {
+      const [existingUsers] = await conn.execute(
+        'SELECT user_id FROM users WHERE email = ? OR phone = ? ORDER BY user_id LIMIT 1',
+        [guest.email ?? null, guest.phone ?? null]
+      ) as any[];
+      userId = existingUsers[0]?.user_id ?? null;
+    }
+
+    if (!userId) {
+      const username = `walkin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const [userResult] = await conn.execute(
+        'INSERT INTO users (username, password, full_name, email, phone) VALUES (?, NULL, ?, ?, ?)',
+        [username, guest.full_name, guest.email ?? null, guest.phone ?? null]
+      ) as any[];
+      userId = Number((userResult as any).insertId);
+      await conn.execute('INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?,3)', [userId]);
+    }
+
+    const totalInventoryPrice = inv.reduce((s: number, r: any) => s + Number(r.price || roomRows[0].base_price), 0);
+    const missingNights = Math.max(0, nights - inv.length);
+    const basePerNight = Math.round((totalInventoryPrice + missingNights * roomRows[0].base_price) / nights);
+    const basePrice = basePerNight * nights;
+    const earlyFee = calcEarlyFee(check_in_time, basePerNight);
+    const lateFee = calcLateFee(check_out_time, basePerNight);
+    const totalPrice = Math.round((basePrice + earlyFee + lateFee) * 1.15);
+
+    const normalizedPaymentMode = ['PAY_LATER', 'CASH_DEPOSIT', 'CASH_FULL'].includes(String(payment_mode))
+      ? String(payment_mode)
+      : 'PAY_LATER';
+    const normalizedDepositPercent = normalizePaymentPercent(deposit_percent);
+    const paidAmount = normalizedPaymentMode === 'CASH_FULL'
+      ? totalPrice
+      : normalizedPaymentMode === 'CASH_DEPOSIT'
+        ? Math.round(totalPrice * normalizedDepositPercent / 100)
+        : 0;
+    const remainingAmount = Math.max(0, totalPrice - paidAmount);
+    const bookingStatus = paidAmount === totalPrice ? 'CONFIRMED' : paidAmount > 0 ? 'PARTIALLY_PAID' : 'CONFIRMED';
+    const paymentPolicy = paidAmount === totalPrice ? 'FULL' : paidAmount > 0 ? 'DEPOSIT' : 'PAY_AT_HOTEL';
+    const paymentType = paidAmount === totalPrice ? 'FULL' : paidAmount > 0 ? 'DEPOSIT' : 'FULL';
+
+    const [bookingResult] = await conn.execute(`
+      INSERT INTO bookings (user_id, total_price, paid_amount, remaining_amount, status, expires_at, payment_policy)
+      VALUES (?, ?, ?, ?, ?, NULL, ?)
+    `, [userId, totalPrice, paidAmount, remainingAmount, bookingStatus, paymentPolicy]) as any[];
+    const bookingId = Number((bookingResult as any).insertId);
+
+    await conn.execute(
+      `INSERT INTO booking_rooms (booking_id, room_id, check_in, check_out, check_in_time, check_out_time, price)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [bookingId, room_id, check_in, check_out, check_in_time ?? null, check_out_time ?? null, basePrice]
+    );
+
+    await conn.execute(
+      'INSERT INTO booking_guests (booking_id, full_name, phone, email) VALUES (?, ?, ?, ?)',
+      [bookingId, guest.full_name, guest.phone ?? null, guest.email ?? null]
+    );
+
+    if (inv.length > 0) {
+      await conn.execute(`
+        UPDATE room_inventory
+        SET status = 'BOOKED', booking_id = ?
+        WHERE room_id = ? AND date >= ? AND date < ?
+      `, [bookingId, room_id, check_in, check_out]);
+    }
+
+    await conn.execute(
+      `INSERT INTO payment_transactions (booking_id, amount, method, gateway, type, order_id, status)
+       VALUES (?, ?, ?, 'cash', ?, ?, ?)`,
+      [
+        bookingId,
+        paidAmount > 0 ? paidAmount : totalPrice,
+        paidAmount > 0 ? 'CASH' : 'PAY_AT_HOTEL',
+        paymentType,
+        `ADMIN_${bookingId}`,
+        paidAmount > 0 ? 'SUCCESS' : 'PENDING',
+      ]
+    );
+
+    await conn.execute(
+      'INSERT INTO activity_logs (user_id, action) VALUES (?, ?)',
+      [req.userId!, `ADMIN_CREATE_BOOKING:${bookingId}`]
+    );
+
+    await conn.commit();
+    res.status(201).json({
+      success: true,
+      booking_id: bookingId,
+      total_price: totalPrice,
+      paid_amount: paidAmount,
+      remaining_amount: remainingAmount,
+      payment_policy: paymentPolicy,
+      status: bookingStatus,
+      base_price: basePrice,
+      early_fee: earlyFee,
+      late_fee: lateFee,
+      nights,
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    res.status(500).json({ success: false, message: err.message ?? 'Lỗi server', code: 'SERVER_ERROR' });
+  } finally {
+    conn.release();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PATCH /api/bookings/:id/pay — thanh toán booking
 // ─────────────────────────────────────────────────────────────────────────────
 bookingRouter.patch('/:id/pay', requireAuth, async (req: AuthRequest, res: Response) => {

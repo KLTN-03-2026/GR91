@@ -3,7 +3,7 @@ import { CheckCircle2, XCircle, X } from 'lucide-react';
 
 type ToastType = 'success' | 'error';
 
-interface ToastItem {
+interface ToastData {
   id: number;
   type: ToastType;
   message: string;
@@ -18,7 +18,7 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 let _id = 0;
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [toasts, setToasts] = useState<ToastData[]>([]);
 
   const toast = useCallback((message: string, type: ToastType = 'success') => {
     const id = ++_id;
@@ -34,14 +34,16 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {/* Portal */}
       <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map((t) => (
-          <ToastItem key={t.id} item={t} onClose={() => remove(t.id)} />
+          <div key={t.id}>
+            <ToastMessage item={t} onClose={() => remove(t.id)} />
+          </div>
         ))}
       </div>
     </ToastContext.Provider>
   );
 };
 
-function ToastItem({ item, onClose }: { item: ToastItem; onClose: () => void }) {
+function ToastMessage({ item, onClose }: { item: ToastData; onClose: () => void }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {

@@ -1,18 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
-  Search, Loader2, Check, X, Clock, AlertCircle, Download,
+  Search, Loader2, Check, X, Clock, AlertCircle, Download, Plus,
   Trash2, Calendar, Users, CreditCard, ChevronRight, Receipt,
   BedDouble, Maximize2, FileText, Printer,
 } from 'lucide-react';
 import { Card } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
 import { DateRangeFilter } from '../../components/admin/DateRangeFilter';
-import { bookingApi, type ApiBooking, type ListQuery } from '../../lib/api';
+import { bookingApi, roomApi, adminRoomApi, type ApiBooking, type ApiRoomUnit, type ListQuery, type RoomDisplayUnit } from '../../lib/api';
 import { formatVND, formatDate, formatTime } from '../../lib/utils';
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CFG = {
   PENDING:   { label: 'Chờ xử lý',   badge: 'bg-yellow-50 text-yellow-700 border-yellow-200', dot: 'bg-yellow-400' },
+  PARTIALLY_PAID: { label: 'Đã cọc', badge: 'bg-orange-50 text-orange-700 border-orange-200', dot: 'bg-orange-400' },
   CONFIRMED: { label: 'Đã xác nhận', badge: 'bg-blue-50 text-blue-700 border-blue-200',       dot: 'bg-blue-400'   },
+  CHECKED_IN: { label: 'Đang ở', badge: 'bg-indigo-50 text-indigo-700 border-indigo-200', dot: 'bg-indigo-400' },
   COMPLETED: { label: 'Hoàn thành',  badge: 'bg-green-50 text-green-700 border-green-200',    dot: 'bg-green-400'  },
   CANCELLED: { label: 'Đã hủy',      badge: 'bg-red-50 text-red-700 border-red-200',          dot: 'bg-red-400'    },
 } as const;
@@ -23,6 +27,7 @@ const TABS: { label: string; value: StatusKey | 'ALL' }[] = [
   { label: 'Tất cả',      value: 'ALL'       },
   { label: 'Chờ xử lý',  value: 'PENDING'   },
   { label: 'Đã xác nhận',value: 'CONFIRMED' },
+  { label: 'Đang ở',     value: 'CHECKED_IN' },
   { label: 'Hoàn thành', value: 'COMPLETED' },
   { label: 'Đã hủy',     value: 'CANCELLED' },
 ];
@@ -55,7 +60,45 @@ function calcLateFeeDisplay(time: string | null | undefined, basePerNight: numbe
   return 0;
 }
 
+type AdminBookingForm = {
+  room_id: string;
+  check_in: string;
+  check_out: string;
+  check_in_time: string;
+  check_out_time: string;
+  full_name: string;
+  phone: string;
+  email: string;
+  payment_mode: 'PAY_LATER' | 'CASH_DEPOSIT' | 'CASH_FULL';
+  deposit_percent: 30 | 50 | 100;
+};
+
+const todayInput = () => new Date().toISOString().split('T')[0];
+
+const addDays = (date: string, days: number) => {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+};
+
+const shortDate = (date: string) =>
+  new Date(`${date}T00:00:00`).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+
+const initialAdminForm = (): AdminBookingForm => ({
+  room_id: '',
+  check_in: todayInput(),
+  check_out: '',
+  check_in_time: '14:00',
+  check_out_time: '12:00',
+  full_name: '',
+  phone: '',
+  email: '',
+  payment_mode: 'PAY_LATER',
+  deposit_percent: 30,
+});
+
 export const AdminBookings: React.FC = () => {
+  const location = useLocation();
   const [bookings, setBookings] = useState<ApiBooking[]>([]);
   const [dailyPlan, setDailyPlan] = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -66,6 +109,15 @@ export const AdminBookings: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [checkoutResult, setCheckoutResult] = useState<any | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<AdminBookingForm>(() => initialAdminForm());
+  const [availableUnits, setAvailableUnits] = useState<ApiRoomUnit[]>([]);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarDays, setCalendarDays] = useState<string[]>([]);
+  const [roomCalendar, setRoomCalendar] = useState<Record<string, RoomDisplayUnit[]>>({});
+  const [createError, setCreateError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +135,53 @@ export const AdminBookings: React.FC = () => {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadAvailableUnits = useCallback(async () => {
+    if (!createOpen || !createForm.check_in || !createForm.check_out || new Date(createForm.check_in) >= new Date(createForm.check_out)) {
+      setAvailableUnits([]);
+      return;
+    }
+    setRoomsLoading(true);
+    try {
+      const units = await roomApi.listUnits({
+        check_in: createForm.check_in,
+        check_out: createForm.check_out,
+      });
+      setAvailableUnits(units);
+      if (createForm.room_id && !units.some((u) => String(u.room_id) === createForm.room_id)) {
+        setCreateForm((prev) => ({ ...prev, room_id: '' }));
+      }
+    } catch (e: any) {
+      setCreateError(e.message ?? 'Không thể tải phòng trống');
+    } finally {
+      setRoomsLoading(false);
+    }
+  }, [createOpen, createForm.check_in, createForm.check_out, createForm.room_id]);
+
+  useEffect(() => { void loadAvailableUnits(); }, [loadAvailableUnits]);
+
+  const loadRoomCalendar = useCallback(async () => {
+    if (!createOpen || !createForm.check_in) {
+      setCalendarDays([]);
+      setRoomCalendar({});
+      return;
+    }
+    const days = Array.from({ length: 7 }, (_, i) => addDays(createForm.check_in, i));
+    setCalendarDays(days);
+    setCalendarLoading(true);
+    try {
+      const results = await Promise.all(days.map((day) => adminRoomApi.listUnitsStatus(day)));
+      const next: Record<string, RoomDisplayUnit[]> = {};
+      days.forEach((day, index) => { next[day] = results[index]; });
+      setRoomCalendar(next);
+    } catch (e: any) {
+      setCreateError(e.message ?? 'Không thể tải lịch phòng');
+    } finally {
+      setCalendarLoading(false);
+    }
+  }, [createOpen, createForm.check_in]);
+
+  useEffect(() => { void loadRoomCalendar(); }, [loadRoomCalendar]);
+
   const openDetail = async (id: number) => {
     setDetailLoading(true);
     try {
@@ -90,6 +189,11 @@ export const AdminBookings: React.FC = () => {
     } catch (e: any) { alert(e.message ?? 'Không thể tải chi tiết'); }
     finally { setDetailLoading(false); }
   };
+
+  useEffect(() => {
+    const bookingId = (location.state as { bookingId?: number } | null)?.bookingId;
+    if (bookingId) void openDetail(bookingId);
+  }, [location.state]);
 
   const handleStatus = async (id: number, status: string) => {
     setUpdating(true);
@@ -101,6 +205,27 @@ export const AdminBookings: React.FC = () => {
     finally { setUpdating(false); }
   };
 
+  const handleAdminCheckIn = async (id: number) => {
+    setUpdating(true);
+    try {
+      await bookingApi.checkIn(id);
+      await load();
+      if (selected?.booking_id === id) setSelected(await bookingApi.detail(id));
+    } catch (e: any) { alert(e.message ?? 'Check-in thất bại'); }
+    finally { setUpdating(false); }
+  };
+
+  const handleAdminCheckOut = async (id: number) => {
+    setUpdating(true);
+    try {
+      const result = await bookingApi.checkOut(id);
+      setCheckoutResult(result);
+      await load();
+      if (selected?.booking_id === id) setSelected(await bookingApi.detail(id));
+    } catch (e: any) { alert(e.message ?? 'Check-out thất bại'); }
+    finally { setUpdating(false); }
+  };
+
   const handleDelete = async (id: number) => {
     if (!confirm('Xóa vĩnh viễn đặt phòng này?')) return;
     try {
@@ -108,6 +233,80 @@ export const AdminBookings: React.FC = () => {
       setBookings((p) => p.filter((b) => b.booking_id !== id));
       if (selected?.booking_id === id) setSelected(null);
     } catch (e: any) { alert(e.message ?? 'Xóa thất bại'); }
+  };
+
+  const openCreateModal = () => {
+    setCreateForm(initialAdminForm());
+    setCreateError('');
+    setAvailableUnits([]);
+    setCreateOpen(true);
+  };
+
+  const handleCreateBooking = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError('');
+    if (!createForm.room_id || !createForm.check_in || !createForm.check_out || !createForm.full_name.trim()) {
+      setCreateError('Vui lòng nhập đủ ngày, phòng và tên khách.');
+      return;
+    }
+    setCreateLoading(true);
+    try {
+      const result = await bookingApi.adminCreate({
+        room_id: Number(createForm.room_id),
+        check_in: createForm.check_in,
+        check_out: createForm.check_out,
+        check_in_time: createForm.check_in_time || undefined,
+        check_out_time: createForm.check_out_time || undefined,
+        guest: {
+          full_name: createForm.full_name.trim(),
+          phone: createForm.phone.trim() || undefined,
+          email: createForm.email.trim() || undefined,
+        },
+        payment_mode: createForm.payment_mode,
+        deposit_percent: createForm.deposit_percent,
+      });
+      setCreateOpen(false);
+      await load();
+      await openDetail(result.booking_id);
+    } catch (err: any) {
+      setCreateError(err.message ?? 'Không thể tạo đặt phòng');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const calendarRows = (() => {
+    const byRoom = new Map<number, { room_id: number; room_number: string; type_name: string; floor: number }>();
+    for (const units of Object.values(roomCalendar) as RoomDisplayUnit[][]) {
+      for (const unit of units) {
+        byRoom.set(unit.room_id, {
+          room_id: unit.room_id,
+          room_number: unit.room_number,
+          type_name: unit.type_name,
+          floor: unit.floor,
+        });
+      }
+    }
+    return Array.from(byRoom.values()).sort((a, b) => a.floor - b.floor || a.room_number.localeCompare(b.room_number));
+  })();
+
+  const getCalendarStatus = (roomId: number, day: string) =>
+    roomCalendar[day]?.find((unit) => unit.room_id === roomId)?.display_status ?? 'INACTIVE';
+
+  const statusCellClass = (status: string) => {
+    if (status === 'AVAILABLE') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (status === 'BOOKED') return 'bg-amber-50 text-amber-700 border-amber-200';
+    if (status === 'CLEANING') return 'bg-yellow-50 text-yellow-700 border-yellow-200';
+    if (status === 'MAINTENANCE') return 'bg-gray-100 text-gray-500 border-gray-200';
+    return 'bg-red-50 text-red-700 border-red-200';
+  };
+
+  const statusCellLabel = (status: string) => {
+    if (status === 'AVAILABLE') return 'Trống';
+    if (status === 'BOOKED') return 'Có khách';
+    if (status === 'CLEANING') return 'Dọn';
+    if (status === 'MAINTENANCE') return 'Bảo trì';
+    return 'Ngưng';
   };
 
   // In hoá đơn — mở cửa sổ in với nội dung HTML
@@ -270,6 +469,10 @@ export const AdminBookings: React.FC = () => {
         </div>
         <div className="flex items-center gap-2">
           <DateRangeFilter onFilter={(s, e) => setQuery({ start_date: s, end_date: e })} />
+          <button onClick={openCreateModal}
+            className="flex items-center gap-1.5 text-sm px-3 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors">
+            <Plus className="h-4 w-4" /> Tạo đặt phòng
+          </button>
           <button onClick={handleExport}
             className="flex items-center gap-1.5 text-sm px-3 py-2 border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 transition-colors">
             <Download className="h-4 w-4" /> CSV
@@ -391,6 +594,210 @@ export const AdminBookings: React.FC = () => {
           </table>
         )}
       </Card>
+
+      {/* Admin Create Booking Modal */}
+      {createOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setCreateOpen(false)}>
+          <form
+            onSubmit={handleCreateBooking}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <p className="text-lg font-bold text-gray-900">Tạo đặt phòng tại quầy</p>
+                <p className="text-xs text-gray-400 mt-0.5">Kiểm tra phòng trống trước khi ghi nhận booking</p>
+              </div>
+              <button type="button" onClick={() => setCreateOpen(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {createError && (
+                <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{createError}</span>
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Thời gian lưu trú</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Nhận phòng</span>
+                    <input type="date" value={createForm.check_in}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, check_in: e.target.value, room_id: '' }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Trả phòng</span>
+                    <input type="date" value={createForm.check_out}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, check_out: e.target.value, room_id: '' }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Giờ nhận</span>
+                    <input type="time" value={createForm.check_in_time}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, check_in_time: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Giờ trả</span>
+                    <input type="time" value={createForm.check_out_time}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, check_out_time: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Phòng còn trống</p>
+                  {roomsLoading && <span className="inline-flex items-center gap-1 text-xs text-gray-400"><Loader2 className="h-3 w-3 animate-spin" /> Đang tải</span>}
+                </div>
+                <select value={createForm.room_id}
+                  onChange={(e) => setCreateForm((p) => ({ ...p, room_id: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!createForm.check_in || !createForm.check_out || roomsLoading}
+                >
+                  <option value="">Chọn phòng</option>
+                  {availableUnits.map((u) => (
+                    <option key={u.room_id} value={u.room_id}>
+                      Phòng {u.room_number} - {u.type_name} - {formatVND(u.effective_price ?? u.base_price)}/đêm
+                    </option>
+                  ))}
+                </select>
+                {createForm.check_in && createForm.check_out && !roomsLoading && availableUnits.length === 0 && (
+                  <p className="text-xs text-gray-400 mt-2">Không có phòng trống hoặc chưa chọn khoảng ngày hợp lệ.</p>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Lịch phòng 7 ngày</p>
+                    <p className="text-xs text-gray-400 mt-1">Bấm vào ô trống để chọn nhanh phòng cho booking.</p>
+                  </div>
+                  {calendarLoading && <span className="inline-flex items-center gap-1 text-xs text-gray-400"><Loader2 className="h-3 w-3 animate-spin" /> Đang tải lịch</span>}
+                </div>
+                <div className="border border-gray-100 rounded-2xl overflow-hidden">
+                  <div className="overflow-auto max-h-72">
+                    <table className="w-full min-w-[720px] text-left">
+                      <thead className="sticky top-0 z-10 bg-gray-50">
+                        <tr className="text-xs text-gray-500">
+                          <th className="px-3 py-2.5 font-semibold w-40">Phòng</th>
+                          {calendarDays.map((day) => (
+                            <th key={day} className="px-2 py-2.5 font-semibold text-center">{shortDate(day)}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {calendarRows.length === 0 && !calendarLoading ? (
+                          <tr>
+                            <td colSpan={calendarDays.length + 1} className="px-3 py-8 text-center text-sm text-gray-400">
+                              Chưa có dữ liệu lịch phòng.
+                            </td>
+                          </tr>
+                        ) : calendarRows.map((room) => (
+                          <tr key={room.room_id} className="border-t border-gray-100">
+                            <td className="px-3 py-2.5">
+                              <p className="text-sm font-bold text-gray-900">Phòng {room.room_number}</p>
+                              <p className="text-xs text-gray-400">{room.type_name} - Tầng {room.floor}</p>
+                            </td>
+                            {calendarDays.map((day) => {
+                              const status = getCalendarStatus(room.room_id, day);
+                              const canSelect = status === 'AVAILABLE';
+                              return (
+                                <td key={`${room.room_id}-${day}`} className="px-1.5 py-2 text-center">
+                                  <button
+                                    type="button"
+                                    disabled={!canSelect}
+                                    onClick={() => setCreateForm((p) => ({ ...p, room_id: String(room.room_id) }))}
+                                    className={`w-full rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${statusCellClass(status)} ${
+                                      createForm.room_id === String(room.room_id) && canSelect ? 'ring-2 ring-blue-400 ring-offset-1' : ''
+                                    }`}
+                                    title={`Phòng ${room.room_number} ngày ${shortDate(day)}: ${statusCellLabel(status)}`}
+                                  >
+                                    {statusCellLabel(status)}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-gray-500">
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" /> Trống</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400" /> Có khách</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400" /> Dọn phòng</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> Bảo trì</span>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Thông tin khách</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Tên khách</span>
+                    <input value={createForm.full_name}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, full_name: e.target.value }))}
+                      placeholder="Nguyễn Văn A"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Số điện thoại</span>
+                    <input value={createForm.phone}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, phone: e.target.value }))}
+                      placeholder="0901234567"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs text-gray-500">Email</span>
+                    <input type="email" value={createForm.email}
+                      onChange={(e) => setCreateForm((p) => ({ ...p, email: e.target.value }))}
+                      placeholder="email@example.com"
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Thanh toán</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <select value={createForm.payment_mode}
+                    onChange={(e) => setCreateForm((p) => ({ ...p, payment_mode: e.target.value as AdminBookingForm['payment_mode'] }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="PAY_LATER">Trả tại khách sạn</option>
+                    <option value="CASH_DEPOSIT">Đã thu cọc tiền mặt</option>
+                    <option value="CASH_FULL">Đã thanh toán đủ tiền mặt</option>
+                  </select>
+                  <select value={createForm.deposit_percent}
+                    onChange={(e) => setCreateForm((p) => ({ ...p, deposit_percent: Number(e.target.value) as 30 | 50 | 100 }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
+                    disabled={createForm.payment_mode !== 'CASH_DEPOSIT'}
+                  >
+                    <option value={30}>Cọc 30%</option>
+                    <option value={50}>Cọc 50%</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex items-center justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={createLoading}>Hủy</Button>
+              <Button type="submit" disabled={createLoading || roomsLoading}>
+                {createLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-4 w-4 mr-1.5" />}
+                Tạo đặt phòng
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Detail Modal */}
       {(selected || detailLoading) && (

@@ -181,7 +181,18 @@ export const roomApi = {
   list: (query?: RoomQuery) => get<ApiRoom[]>('/rooms', query as any),
   listUnits: (query?: RoomQuery) => get<ApiRoomUnit[]>('/rooms/all-units', query as any),
   recommendations: (limit: number = 10) => get<ApiRoom[]>('/rooms/recommendations', { limit }),
+  featured: (limit: number = 3) => get<ApiRoom[]>('/rooms/featured', { limit }),
   detail: (typeId: number | string) => get<ApiRoom>(`/rooms/${typeId}`),
+  checkAvailability: async (roomId: number | string, checkIn: string, checkOut: string) => {
+    const availability = await get<RoomAvailabilityResponse>(`/rooms/physical/${roomId}/availability`);
+    const start = new Date(`${checkIn}T00:00:00`);
+    const end = new Date(`${checkOut}T00:00:00`);
+    const unavailable = availability.data.some((day) => {
+      const current = new Date(`${day.date}T00:00:00`);
+      return current >= start && current < end && day.status !== 'AVAILABLE';
+    });
+    return { available: !unavailable };
+  },
   create: (data: { name: string; description?: string; base_price: number; capacity: number; category_id?: number | null; area_sqm?: number | null; bed_id?: number | null }) =>
     post<{ type_id: number }>('/rooms', data),
   update: (typeId: number | string, data: Partial<{ name: string; description: string; base_price: number; capacity: number; category_id: number | null; area_sqm: number | null; bed_id: number | null }>) =>
@@ -241,7 +252,7 @@ export interface ReviewStats {
 
 export interface ApiBooking {
   booking_id: number;
-  status: 'PENDING' | 'PARTIALLY_PAID' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+  status: 'PENDING' | 'PARTIALLY_PAID' | 'CONFIRMED' | 'CHECKED_IN' | 'COMPLETED' | 'CANCELLED';
   total_price: number;
   payment_policy?: 'FULL' | 'DEPOSIT' | 'PAY_AT_HOTEL' | null;
   paid_amount?: number;
@@ -262,6 +273,7 @@ export interface ApiBooking {
   room_id?: number | null;
   payment_method?: string | null;
   payment_status?: 'PENDING' | 'SUCCESS' | 'FAILED' | null;
+  room_status?: string | null;
   room_image?: string | null;
   // Detail expansion
   rooms?: { booking_room_id: number; room_id: number; room_number: string; room_type: string; check_in: string; check_out: string; check_in_time?: string | null; check_out_time?: string | null; price: number; image?: string | null }[];
@@ -350,9 +362,24 @@ export interface RoomDisplayUnit {
     check_out: string | null;  // YYYY-MM-DD
     check_in_time: string;     // HH:mm
     check_out_time: string;    // HH:mm
+    status?: 'PENDING' | 'PARTIALLY_PAID' | 'CONFIRMED' | 'CHECKED_IN' | 'COMPLETED' | 'CANCELLED' | null;
+    full_name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    total_price?: number;
+    paid_amount?: number;
+    remaining_amount?: number;
   } | null;
   // Booking tương lai (trong 5 ngày tới)
-  future_bookings?: { check_in: string; check_out: string; full_name: string | null }[];
+  future_bookings?: {
+    booking_id?: number;
+    booking_status?: string;
+    check_in: string;
+    check_out: string;
+    full_name: string | null;
+    phone?: string | null;
+    email?: string | null;
+  }[];
 }
 
 export const adminRoomApi = {
@@ -454,16 +481,33 @@ export const bookingApi = {
     del<{ success: boolean }>(`/bookings/${id}`),
   create: (data: { room_id: number; check_in: string; check_out: string; check_in_time?: string; check_out_time?: string; guests: { full_name: string; email?: string; phone?: string }[]; payment_percent?: 30 | 50 | 100 }) =>
     post<{ success: boolean; booking_id: number; total_price: number; amount_due_now: number; payment_percent: 30 | 50 | 100; payment_policy: 'FULL' | 'DEPOSIT'; paid_amount: number; remaining_amount: number; base_price: number; early_fee: number; late_fee: number; nights: number; expires_at: string }>('/bookings', data),
-  pay: (id: number) => patch<{ success: boolean; status: string }>(`/bookings/${id}/pay`),
-  vnpayInitiate: (id: number) => post<{ success: boolean; paymentUrl: string }>(`/bookings/${id}/vnpay`),
+  adminCreate: (data: {
+    room_id: number;
+    check_in: string;
+    check_out: string;
+    check_in_time?: string;
+    check_out_time?: string;
+    guest: { full_name: string; email?: string; phone?: string };
+    payment_mode: 'PAY_LATER' | 'CASH_DEPOSIT' | 'CASH_FULL';
+    deposit_percent?: 30 | 50 | 100;
+  }) => post<{
+    success: boolean;
+    booking_id: number;
+    total_price: number;
+    paid_amount: number;
+    remaining_amount: number;
+    status: string;
+  }>('/bookings/admin', data),
+  pay: (id: number) => patch<{ success: boolean; status: string }>(`/bookings/${id}/pay`, {}),
+  vnpayInitiate: (id: number) => post<{ success: boolean; paymentUrl: string }>(`/bookings/${id}/vnpay`, {}),
   getDailyPlan: () => get<any[]>('/bookings/daily-plan'),
-  checkIn: (id: number) => patch<{ success: boolean; message: string }>(`/bookings/${id}/check-in`),
+  checkIn: (id: number) => patch<{ success: boolean; message: string }>(`/bookings/${id}/check-in`, {}),
   checkOut: (id: number) => patch<{ 
     success: boolean; 
     extraFee: number; 
     description: string;
     totalFinal: number;
-  }>(`/bookings/${id}/check-out`),
+  }>(`/bookings/${id}/check-out`, {}),
   vnpayReturn: async (queryString: string): Promise<{ success: boolean; verified: boolean; booking_id: number; response_code: string | null; status: string; message: string }> => {
     const res = await safeFetch(`${BASE}/bookings/vnpay-return?${queryString}`, { headers: authHeaders() });
     const data = await res.json();
@@ -471,15 +515,6 @@ export const bookingApi = {
     return data;
   },
 };
-
-export interface ApiStats {
-  totalRevenue: number;
-  bookingCount: number;
-  totalRooms: number;
-  vacantRooms: number;
-  userCount: number;
-  recentBookings: any[];
-}
 
 export interface AnalyticsData {
   revenueByMonth: { month: string; revenue: number }[];

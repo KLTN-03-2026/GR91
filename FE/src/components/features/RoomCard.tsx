@@ -50,6 +50,11 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
           <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
           
           <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
+            {room.highlightLabel && (
+              <Badge variant="gray" className="bg-white/95 border-none text-gray-800 shadow-sm font-semibold text-[10px] px-2 py-0.5">
+                {room.highlightLabel}
+              </Badge>
+            )}
             {room.isPopular && (
               <Badge variant="blue" className="bg-blue-600 border-none text-white shadow-sm font-semibold tracking-wider text-[10px] px-2 py-0.5">
                 POPULAR
@@ -65,8 +70,8 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
           <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
              <div className="flex items-center gap-1 bg-black/40 backdrop-blur-md px-2 py-1 rounded-lg border border-white/20">
                <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400" />
-               <span className="font-bold text-white text-xs">{room.rating ? room.rating.toFixed(1) : parseFloat("4.5").toFixed(1)}</span>
-               <span className="text-gray-300 text-[10px]">({room.reviews > 0 ? room.reviews : 12})</span>
+               <span className="font-bold text-white text-xs">{room.rating ? room.rating.toFixed(1) : '0.0'}</span>
+               <span className="text-gray-300 text-[10px]">({room.reviews > 0 ? room.reviews : 0})</span>
              </div>
              
              {room.roomCount && room.roomCount > 0 ? (
@@ -141,7 +146,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({ room, layout = 'list' }) => 
         <div className="absolute top-3 left-3 flex items-center gap-1 bg-white/90 backdrop-blur-sm px-2.5 py-1 rounded-full">
           <Star className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />
           <span className="font-bold text-xs">{room.rating ? room.rating.toFixed(1) : '4.5'}</span>
-          <span className="text-gray-500 text-xs">({room.reviews || 12})</span>
+          <span className="text-gray-500 text-xs">({room.reviews || 0})</span>
         </div>
         {room.discount && (
           <div className="absolute top-3 right-3">

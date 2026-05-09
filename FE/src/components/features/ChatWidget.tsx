@@ -137,7 +137,7 @@ export const ChatWidget: React.FC = () => {
                   {/* Chỉ render Cards khi mảng rooms có dữ liệu thực tế */}
                   {msg.rooms && Array.isArray(msg.rooms) && msg.rooms.length > 0 && (
                     <div className="flex flex-col gap-3 w-[260px] mt-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                      {msg.rooms.slice(0, 3).map((r: any, idx: number) => {
+                      {msg.rooms.map((r: any, idx: number) => {
                         const roomId = r.id || r.room_id;
                         const roomName = r.name || r.type_name || `Phòng ${r.room_number}`;
                         const roomImage = r.image || r.first_image || 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80';

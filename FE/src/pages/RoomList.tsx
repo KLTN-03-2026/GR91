@@ -226,7 +226,11 @@ export const RoomList: React.FC = () => {
             ) : paginated.length > 0 ? (
               <>
                 <div className="space-y-5">
-                  {paginated.map((unit) => <UnitCard key={unit.room_id} unit={unit} />)}
+                  {paginated.map((unit) => (
+                    <div key={unit.room_id}>
+                      <UnitCard unit={unit} />
+                    </div>
+                  ))}
                 </div>
 
                 {totalPages > 1 && (

@@ -21,6 +21,7 @@ export interface Room {
   isPopular?: boolean;
   discount?: number;
   roomCount?: number;
+  highlightLabel?: string;
 }
 
 export interface Booking {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Loader2, Star, X, MessageSquare, CheckCircle2, Pencil } from 'lucide-react';
+import { AlertCircle, Loader2, Star, X, MessageSquare, CheckCircle2, Pencil } from 'lucide-react';
 import { ProfileSidebar } from '../components/layout/ProfileSidebar';
 import { BookingCard } from '../components/features/BookingCard';
 import { Card } from '../components/ui/Card';

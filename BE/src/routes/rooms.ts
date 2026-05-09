@@ -439,7 +439,7 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
   const conn = await pool.getConnection();
   try {
     const [futureBookingsRows] = await conn.execute(`
-      SELECT br.room_id, br.check_in, br.check_out, u.full_name
+      SELECT br.room_id, b.booking_id, b.status AS booking_status, br.check_in, br.check_out, u.full_name, u.phone, u.email
       FROM booking_rooms br
       JOIN bookings b ON b.booking_id = br.booking_id
       LEFT JOIN users u ON u.user_id = b.user_id
@@ -455,7 +455,11 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
       futureBookingsMap[roomId].push({
         check_in: row.check_in instanceof Date ? row.check_in.toISOString().split('T')[0] : row.check_in,
         check_out: row.check_out instanceof Date ? row.check_out.toISOString().split('T')[0] : row.check_out,
+        booking_id: row.booking_id,
+        booking_status: row.booking_status,
         full_name: row.full_name,
+        phone: row.phone,
+        email: row.email,
       });
     }
 
@@ -475,36 +479,43 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
         -- Có booking active vào ngày này không?
         MAX(CASE
           WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN')
-            AND br.check_in  <= ?
-            AND br.check_out >  ?
+            AND br.check_in  <= params.target_date
+            AND br.check_out >  params.target_date
           THEN 1 ELSE 0
         END) AS is_booked,
         -- Khách vừa check-out hôm nay (đang dọn phòng)?
         MAX(CASE
           WHEN b.status = 'COMPLETED'
-            AND DATE(br.check_out) = ?
+            AND DATE(br.check_out) = params.target_date
           THEN 1 ELSE 0
         END) AS is_cleaning,
         -- Thông tin booking hiện tại (active)
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in  END) AS booking_check_in,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out END) AS booking_check_out,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_in_time  END) AS booking_check_in_time,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN br.check_out_time END) AS booking_check_out_time,
-        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= ? AND br.check_out > ? THEN b.booking_id END) AS active_booking_id
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN br.check_in  END) AS booking_check_in,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN br.check_out END) AS booking_check_out,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN br.check_in_time  END) AS booking_check_in_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN br.check_out_time END) AS booking_check_out_time,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN b.booking_id END) AS active_booking_id,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN b.status END) AS active_booking_status,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN u.full_name END) AS active_full_name,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN u.phone END) AS active_phone,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN u.email END) AS active_email,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN b.total_price END) AS active_total_price,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN b.paid_amount END) AS active_paid_amount,
+        MAX(CASE WHEN b.status IN ('CONFIRMED','PENDING','CHECKED_IN') AND br.check_in <= params.target_date AND br.check_out > params.target_date THEN b.remaining_amount END) AS active_remaining_amount
       FROM rooms r
+      CROSS JOIN (SELECT DATE(?) AS target_date) params
       JOIN room_types rt ON r.type_id = rt.type_id
-      LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = ?
+      LEFT JOIN room_prices rp      ON rp.room_id = r.room_id AND rp.date = params.target_date
       LEFT JOIN room_type_beds rtb  ON rt.type_id = rtb.type_id
       LEFT JOIN bed_types bt        ON rtb.bed_id = bt.bed_id
       LEFT JOIN room_images ri      ON ri.room_id = r.room_id
       LEFT JOIN booking_rooms br    ON br.room_id = r.room_id
       LEFT JOIN bookings b          ON b.booking_id = br.booking_id
+      LEFT JOIN users u             ON u.user_id = b.user_id
       GROUP BY r.room_id, r.room_number, r.floor, r.status, r.room_note,
                rt.type_id, rt.name, rt.base_price
       ORDER BY r.floor ASC, r.room_number ASC
-    `, [date, date, date,
-        date, date, date, date, date, date, date, date, date, date,
-        date]) as any[];
+    `, [date]) as any[];
 
     res.json(rows.map((r: any) => {
       let display_status: string;
@@ -542,10 +553,20 @@ roomRouter.get('/admin/units-status', requireAuth, requireAdmin, async (req: Aut
           check_out:       r.booking_check_out  ? r.booking_check_out.toISOString().split('T')[0] : null,
           check_in_time:   r.booking_check_in_time  ?? '14:00',
           check_out_time:  r.booking_check_out_time ?? '11:00',
+          status:          r.active_booking_status ?? null,
+          full_name:       r.active_full_name ?? null,
+          phone:           r.active_phone ?? null,
+          email:           r.active_email ?? null,
+          total_price:     Number(r.active_total_price ?? 0),
+          paid_amount:     Number(r.active_paid_amount ?? 0),
+          remaining_amount:Number(r.active_remaining_amount ?? 0),
         } : null,
         future_bookings: futureBookingsMap[r.room_id] || [],
       };
     }));
+  } catch (err: any) {
+    console.error('[AdminUnitsStatus] Error:', err);
+    res.status(500).json({ success: false, message: err.message ?? 'Lỗi server' });
   } finally { conn.release(); }
 });
 
@@ -833,6 +854,71 @@ roomRouter.get('/recommendations', optionalAuth, async (req: AuthRequest, res: R
     types.sort((a: any, b: any) => b.score - a.score);
     res.json(types.slice(0, limit));
 
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
+// GET /api/rooms/featured — phòng nổi bật theo lượt đặt và đánh giá
+roomRouter.get('/featured', async (req: Request, res: Response) => {
+  const limit = Number(req.query.limit) || 3;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute(`
+      SELECT
+        rt.type_id, rt.name AS type_name, rt.description, rt.base_price, rt.capacity, rt.area_sqm,
+        rc.name AS category_name,
+        GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ',') AS amenities,
+        GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
+        MIN(ri.url) AS image,
+        COUNT(DISTINCT r.room_id) AS room_count,
+        MIN(r.room_id) AS first_room_id,
+        COALESCE(booking_stats.booking_count, 0) AS booking_count,
+        COALESCE(review_stats.rating, 0) AS rating,
+        COALESCE(review_stats.review_count, 0) AS review_count
+      FROM room_types rt
+      JOIN rooms r ON r.type_id = rt.type_id AND r.status = 'ACTIVE'
+      LEFT JOIN room_categories rc ON rt.category_id = rc.category_id
+      LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
+      LEFT JOIN amenities a ON rta.amenity_id = a.amenity_id
+      LEFT JOIN room_type_beds rtb ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt ON rtb.bed_id = bt.bed_id
+      LEFT JOIN room_images ri ON ri.room_id = r.room_id
+      LEFT JOIN (
+        SELECT r2.type_id, COUNT(*) AS booking_count
+        FROM booking_rooms br
+        JOIN rooms r2 ON br.room_id = r2.room_id
+        JOIN bookings b ON b.booking_id = br.booking_id
+        WHERE b.status NOT IN ('CANCELLED')
+        GROUP BY r2.type_id
+      ) booking_stats ON booking_stats.type_id = rt.type_id
+      LEFT JOIN (
+        SELECT room_type_id, ROUND(AVG(rating), 1) AS rating, COUNT(*) AS review_count
+        FROM reviews
+        WHERE status = 'VISIBLE'
+        GROUP BY room_type_id
+      ) review_stats ON review_stats.room_type_id = rt.type_id
+      GROUP BY rt.type_id, rc.name, booking_stats.booking_count, review_stats.rating, review_stats.review_count
+      ORDER BY rating DESC, booking_count DESC, review_count DESC, rt.base_price ASC
+      LIMIT ?
+    `, [limit]) as any[];
+
+    res.json((rows as any[]).map((r: any) => ({
+      ...r,
+      amenities: r.amenities ? r.amenities.split(',') : [],
+      beds: r.beds ? r.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
+      rating: Number(r.rating),
+      review_count: Number(r.review_count),
+      booking_count: Number(r.booking_count),
+      room_count: Number(r.room_count),
+      first_room_id: r.first_room_id ?? null,
+      image: r.image ?? null,
+    })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   } finally {

@@ -6,12 +6,23 @@ import { SearchBar } from '../components/features/SearchBar';
 import { RoomCard } from '../components/features/RoomCard';
 import { ChatWidget } from '../components/features/ChatWidget';
 import { roomApi, type ApiRoom } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import type { Room } from '../types';
 
 const FALLBACK_IMG = 'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=800&q=80';
 
-function toCard(r: ApiRoom): Room {
+function reasonForRoom(r: ApiRoom, fallback: string) {
+  const rating = Number((r as any).rating ?? 0);
+  const bookings = Number((r as any).booking_count ?? 0);
+  if (rating >= 4.8) return 'Đánh giá cao';
+  if (bookings >= 5) return 'Bán chạy';
+  return fallback;
+}
+
+function toCard(r: ApiRoom, highlightLabel?: string): Room {
   const bedName = r.beds && r.beds.length > 0 ? r.beds[0].name : '';
+  const rating = Number((r as any).rating ?? 0);
+  const reviews = Number((r as any).review_count ?? (r as any).booking_count ?? 0);
   return {
     id: String(r.type_id),
     room_id: r.first_room_id ?? r.rooms?.[0]?.room_id ?? null,
@@ -22,14 +33,15 @@ function toCard(r: ApiRoom): Room {
     bed: bedName,
     capacity: String(r.capacity),
     maxGuests: r.capacity,
-    rating: (r as any).rating ?? 4.5,
-    reviews: (r as any).booking_count ?? Math.floor(Math.random() * 50) + 10,
+    rating,
+    reviews,
     image: r.image ?? FALLBACK_IMG,
     images: r.image ? [r.image] : [FALLBACK_IMG],
     description: r.description ?? '',
     amenities: r.amenities || [],
     isPopular: (r as any).booking_count > 5 || (r as any).rating >= 4.8,
     roomCount: r.room_count ?? 0,
+    highlightLabel,
   };
 }
 
@@ -82,15 +94,21 @@ const SERVICES = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export const Home: React.FC = () => {
+  const { user } = useAuth();
   const [featuredRooms, setFeaturedRooms] = useState<ReturnType<typeof toCard>[]>([]);
   const [recommendedRooms, setRecommendedRooms] = useState<ReturnType<typeof toCard>[]>([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
+  const [loadingFeatured, setLoadingFeatured] = useState(true);
 
   useEffect(() => {
-    roomApi.list().then((data) => setFeaturedRooms(data.slice(0, 3).map(toCard))).catch(() => {});
+    roomApi.featured(3).then((data) => {
+      setFeaturedRooms(data.map((room) => toCard(room, reasonForRoom(room, 'Nổi bật'))));
+    }).catch(() => {
+      roomApi.list().then((data) => setFeaturedRooms(data.slice(0, 3).map((room) => toCard(room, 'Nổi bật')))).catch(() => {});
+    }).finally(() => setLoadingFeatured(false));
     
     roomApi.recommendations(3).then((data) => {
-      setRecommendedRooms(data.map(toCard));
+      setRecommendedRooms(data.map((room) => toCard(room, user ? reasonForRoom(room, 'Phù hợp với bạn') : reasonForRoom(room, 'Được yêu thích'))));
       setLoadingRecommendations(false);
     }).catch(() => {
       setLoadingRecommendations(false);
@@ -172,7 +190,9 @@ export const Home: React.FC = () => {
         >
           <div>
             <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 mb-1">Gợi ý cho bạn</h2>
-            <p className="text-gray-500 text-sm">Những lựa chọn tuyệt vời nhất dựa trên sở thích của bạn</p>
+            <p className="text-gray-500 text-sm">
+              {user ? 'Dựa trên lịch sử đặt phòng, đánh giá và tiện nghi bạn thường chọn' : 'Được nhiều khách lựa chọn và đánh giá cao'}
+            </p>
           </div>
           <Link to="/rooms?sort=recommend" className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:text-blue-800">
             Xem tất cả <ArrowRight className="h-4 w-4" />
@@ -218,15 +238,27 @@ export const Home: React.FC = () => {
         >
           <div>
             <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 mb-1">Phòng nổi bật</h2>
-            <p className="text-gray-500 text-sm">Lựa chọn phòng nghỉ phù hợp nhất với bạn</p>
+            <p className="text-gray-500 text-sm">Những loại phòng bán chạy và được đánh giá tốt nhất</p>
           </div>
           <Link to="/rooms" className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:text-blue-800">
             Xem tất cả <ArrowRight className="h-4 w-4" />
           </Link>
         </motion.div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {featuredRooms.map((room, i) => (
+        {loadingFeatured ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="animate-pulse bg-white rounded-2xl p-4 shadow-sm border border-gray-100 h-[400px]">
+                <div className="bg-gray-200 h-48 rounded-xl mb-4"></div>
+                <div className="h-6 bg-gray-200 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+                <div className="h-10 bg-gray-200 rounded w-full mt-auto"></div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {featuredRooms.map((room, i) => (
             <motion.div
               key={room.id}
               initial={{ opacity: 0, y: 40 }}
@@ -238,7 +270,8 @@ export const Home: React.FC = () => {
               <RoomCard room={room} layout="grid" />
             </motion.div>
           ))}
-        </div>
+          </div>
+        )}
       </section>
 
       {/* ── Services ── */}

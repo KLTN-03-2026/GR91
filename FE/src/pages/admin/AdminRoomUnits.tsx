@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Search, Loader2, Plus, Trash2, Edit2, Check, X,
   ExternalLink, DollarSign, RotateCcw, LayoutGrid, List, CalendarDays,
@@ -8,7 +8,7 @@ import {
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { useToast } from '../../components/ui/Toast';
-import { roomApi, adminRoomApi, type ApiRoom, type RoomDisplayUnit } from '../../lib/api';
+import { bookingApi, roomApi, adminRoomApi, type ApiRoom, type RoomDisplayUnit } from '../../lib/api';
 import { formatVND } from '../../lib/utils';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -58,6 +58,15 @@ const DB_STATUS_CFG = {
   MAINTENANCE: { label: 'Bảo trì' },
   CLEANING:    { label: 'Đang dọn phòng' },
 } as const;
+
+const BOOKING_STATUS_LABEL: Record<string, string> = {
+  PENDING: 'Chờ thanh toán',
+  PARTIALLY_PAID: 'Đã cọc',
+  CONFIRMED: 'Đã xác nhận',
+  CHECKED_IN: 'Đang ở',
+  COMPLETED: 'Hoàn thành',
+  CANCELLED: 'Đã hủy',
+};
 
 const sel = 'border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500';
 const today = () => new Date().toISOString().split('T')[0];
@@ -190,6 +199,11 @@ function RoomChip({
             <span>{u.booking.check_out_time}</span>
           </div>
         )}
+        {u.booking?.full_name && (
+          <span className="text-[10px] font-semibold leading-none max-w-[88px] truncate mt-0.5">
+            {u.booking.full_name}
+          </span>
+        )}
 
         {/* Mini timeline */}
         <div className="flex gap-1 mt-1.5 opacity-80">
@@ -218,13 +232,19 @@ function RoomChip({
 
 // ─── Room Popover ─────────────────────────────────────────────────────────────
 function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, startEdit, saveEdit, setEditId,
-  priceEditId, priceInput, setPriceInput, priceSaving, startPriceEdit, savePriceEdit, setPriceEditId, resetPrice, handleDelete }: {
+  priceEditId, priceInput, setPriceInput, priceSaving, startPriceEdit, savePriceEdit, setPriceEditId, resetPrice, handleDelete,
+  viewBooking, checkInBooking, checkOutBooking, payBooking, actionLoadingId }: {
   u: RoomDisplayUnit; onClose: () => void;
   editId: number | null; editForm: any; setEditForm: any; editSaving: boolean;
   startEdit: (u: RoomDisplayUnit) => void; saveEdit: (u: RoomDisplayUnit) => void; setEditId: (v: number | null) => void;
   priceEditId: number | null; priceInput: string; setPriceInput: (v: string) => void; priceSaving: boolean;
   startPriceEdit: (u: RoomDisplayUnit) => void; savePriceEdit: (u: RoomDisplayUnit) => void; setPriceEditId: (v: number | null) => void;
   resetPrice: (u: RoomDisplayUnit) => void; handleDelete: (u: RoomDisplayUnit) => void;
+  viewBooking: (bookingId: number) => void;
+  checkInBooking: (bookingId: number) => void;
+  checkOutBooking: (bookingId: number) => void;
+  payBooking: (bookingId: number) => void;
+  actionLoadingId: number | null;
 }) {
   const isEditing = editId === u.room_id;
   const isPriceEditing = priceEditId === u.room_id;
@@ -233,6 +253,12 @@ function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, st
   const remaining = u.booking
     ? timeUntilCheckout(u.booking.check_out, u.booking.check_out_time)
     : null;
+  const bookingId = Number(u.booking?.booking_id ?? 0);
+  const bookingStatus = u.booking?.status ?? '';
+  const canCheckIn = bookingId > 0 && bookingStatus === 'CONFIRMED';
+  const canCheckOut = bookingId > 0 && bookingStatus === 'CHECKED_IN';
+  const canPay = bookingId > 0 && Number(u.booking?.remaining_amount ?? 0) > 0;
+  const actionBusy = actionLoadingId === bookingId;
 
   return (
     <div className="absolute top-full left-0 mt-2 z-40 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
@@ -253,6 +279,17 @@ function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, st
           <p className="text-xs font-semibold text-amber-800 mb-2 flex items-center gap-1.5">
             <User className="h-3.5 w-3.5" /> Thông tin khách
           </p>
+          <div className="mb-2 rounded-xl bg-white/70 border border-amber-100 px-3 py-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-gray-900 truncate">{u.booking.full_name ?? 'Khách chưa rõ tên'}</p>
+                <p className="text-[11px] text-gray-500 truncate">{u.booking.phone || u.booking.email || 'Chưa có thông tin liên hệ'}</p>
+              </div>
+              <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-semibold">
+                #{u.booking.booking_id}
+              </span>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <div className="flex items-center gap-1 text-gray-600">
               <LogIn className="h-3 w-3 text-emerald-500" />
@@ -271,6 +308,22 @@ function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, st
               {remaining === 'Quá giờ' ? 'Đã quá giờ trả phòng!' : `Còn ${remaining} đến giờ trả phòng`}
             </div>
           )}
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-lg bg-white/70 border border-amber-100 px-2 py-1.5">
+              <p className="text-gray-400">Trạng thái</p>
+              <p className="font-semibold text-gray-800">{BOOKING_STATUS_LABEL[bookingStatus] ?? bookingStatus}</p>
+            </div>
+            <div className="rounded-lg bg-white/70 border border-amber-100 px-2 py-1.5">
+              <p className="text-gray-400">Còn lại</p>
+              <p className={Number(u.booking.remaining_amount ?? 0) > 0 ? 'font-semibold text-orange-600' : 'font-semibold text-emerald-600'}>
+                {formatVND(Number(u.booking.remaining_amount ?? 0))}
+              </p>
+            </div>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+            <div className="flex justify-between"><span className="text-gray-400">Tổng</span><span className="font-medium">{formatVND(Number(u.booking.total_price ?? 0))}</span></div>
+            <div className="flex justify-between"><span className="text-gray-400">Đã trả</span><span className="font-medium text-emerald-600">{formatVND(Number(u.booking.paid_amount ?? 0))}</span></div>
+          </div>
         </div>
       )}
 
@@ -351,7 +404,27 @@ function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, st
             <button onClick={() => setEditId(null)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-100">Hủy</button>
           </div>
         ) : (
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
+            {bookingId > 0 && (
+              <button onClick={() => viewBooking(bookingId)} title="Xem booking" className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {canCheckIn && (
+              <button onClick={() => checkInBooking(bookingId)} disabled={actionBusy} title="Check-in" className="px-2 py-1.5 text-[11px] font-semibold text-green-700 bg-green-50 border border-green-200 hover:bg-green-100 rounded-lg transition-colors disabled:opacity-50">
+                {actionBusy ? '...' : 'Check-in'}
+              </button>
+            )}
+            {canCheckOut && (
+              <button onClick={() => checkOutBooking(bookingId)} disabled={actionBusy} title="Check-out" className="px-2 py-1.5 text-[11px] font-semibold text-orange-700 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg transition-colors disabled:opacity-50">
+                {actionBusy ? '...' : 'Check-out'}
+              </button>
+            )}
+            {canPay && (
+              <button onClick={() => payBooking(bookingId)} disabled={actionBusy} title="Thu tiền còn lại" className="px-2 py-1.5 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50">
+                {actionBusy ? '...' : 'Thu tiền'}
+              </button>
+            )}
             <button onClick={() => startEdit(u)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit2 className="h-3.5 w-3.5" /></button>
             <Link to={`/admin/rooms/${u.type_id}/units/${u.room_id}`} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"><ExternalLink className="h-3.5 w-3.5" /></Link>
             <button onClick={() => handleDelete(u)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -365,6 +438,7 @@ function RoomPopover({ u, onClose, editId, editForm, setEditForm, editSaving, st
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export const AdminRoomUnits: React.FC = () => {
+  const navigate = useNavigate();
   const [units, setUnits]     = useState<RoomDisplayUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [date, setDate]       = useState(today());
@@ -385,6 +459,7 @@ export const AdminRoomUnits: React.FC = () => {
   const [priceEditId, setPriceEditId]   = useState<number | null>(null);
   const [priceInput, setPriceInput]     = useState('');
   const [priceSaving, setPriceSaving]   = useState(false);
+  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
 
   // Realtime polling
   const [connected, setConnected]       = useState(false);
@@ -520,6 +595,50 @@ export const AdminRoomUnits: React.FC = () => {
     setUnits((prev) => prev.map((x) => x.room_id === u.room_id ? { ...x, effective_price: x.base_price } : x));
   };
 
+  const viewBooking = (bookingId: number) => {
+    navigate('/admin/bookings', { state: { bookingId } });
+  };
+
+  const checkInBooking = async (bookingId: number) => {
+    setActionLoadingId(bookingId);
+    try {
+      await bookingApi.checkIn(bookingId);
+      await fetchStatus(date, true);
+      toast(`Đã check-in booking #${bookingId}`);
+    } catch (e: any) {
+      toast(e.message ?? 'Check-in thất bại', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const checkOutBooking = async (bookingId: number) => {
+    setActionLoadingId(bookingId);
+    try {
+      await bookingApi.checkOut(bookingId);
+      await fetchStatus(date, true);
+      toast(`Đã check-out booking #${bookingId}`);
+    } catch (e: any) {
+      toast(e.message ?? 'Check-out thất bại', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const payBooking = async (bookingId: number) => {
+    if (!confirm(`Xác nhận thu toàn bộ số tiền còn lại cho booking #${bookingId}?`)) return;
+    setActionLoadingId(bookingId);
+    try {
+      await bookingApi.pay(bookingId);
+      await fetchStatus(date, true);
+      toast(`Đã ghi nhận thanh toán booking #${bookingId}`);
+    } catch (e: any) {
+      toast(e.message ?? 'Thanh toán thất bại', 'error');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   // ─── Derived state ───────────────────────────────────────────────────────────
   const filtered = useMemo(() => units
     .filter((u) => !filterFloor  || String(u.floor) === filterFloor)
@@ -546,7 +665,7 @@ export const AdminRoomUnits: React.FC = () => {
 
   const pp = { editId, editForm, setEditForm, editSaving, startEdit, saveEdit, setEditId,
     priceEditId, priceInput, setPriceInput, priceSaving, startPriceEdit, savePriceEdit, setPriceEditId,
-    resetPrice, handleDelete };
+    resetPrice, handleDelete, viewBooking, checkInBooking, checkOutBooking, payBooking, actionLoadingId };
 
   const rs = 'border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white';
 
@@ -691,6 +810,8 @@ export const AdminRoomUnits: React.FC = () => {
                 <th className="px-5 py-3">Giường</th>
                 <th className="px-5 py-3">Giá / đêm</th>
                 <th className="px-5 py-3">Trạng thái</th>
+                <th className="px-5 py-3">Khách</th>
+                <th className="px-5 py-3">Thanh toán</th>
                 <th className="px-5 py-3">Check-in / out</th>
                 <th className="px-5 py-3 text-right">Thao tác</th>
               </tr>
@@ -752,6 +873,28 @@ export const AdminRoomUnits: React.FC = () => {
                         </span>
                       )}
                     </td>
+                    <td className="px-5 py-3">
+                      {u.booking ? (
+                        <div className="text-xs">
+                          <p className="font-semibold text-gray-900 max-w-[140px] truncate">{u.booking.full_name ?? 'Khách chưa rõ tên'}</p>
+                          <p className="text-gray-400 max-w-[140px] truncate">{u.booking.phone || u.booking.email || `#${u.booking.booking_id}`}</p>
+                        </div>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3">
+                      {u.booking ? (
+                        <div className="text-xs">
+                          <p className={Number(u.booking.remaining_amount ?? 0) > 0 ? 'font-semibold text-orange-600' : 'font-semibold text-emerald-600'}>
+                            Còn {formatVND(Number(u.booking.remaining_amount ?? 0))}
+                          </p>
+                          <p className="text-gray-400">Đã trả {formatVND(Number(u.booking.paid_amount ?? 0))}</p>
+                        </div>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
                     {/* Check-in / out column */}
                     <td className="px-5 py-3">
                       {u.booking ? (
@@ -780,6 +923,18 @@ export const AdminRoomUnits: React.FC = () => {
                           </>
                         ) : (
                           <>
+                            {u.booking?.booking_id && (
+                              <button onClick={() => viewBooking(Number(u.booking!.booking_id))} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Xem booking"><ExternalLink className="h-4 w-4" /></button>
+                            )}
+                            {u.booking?.booking_id && u.booking.status === 'CONFIRMED' && (
+                              <button onClick={() => checkInBooking(Number(u.booking!.booking_id))} disabled={actionLoadingId === u.booking.booking_id} className="px-2 py-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 disabled:opacity-50">In</button>
+                            )}
+                            {u.booking?.booking_id && u.booking.status === 'CHECKED_IN' && (
+                              <button onClick={() => checkOutBooking(Number(u.booking!.booking_id))} disabled={actionLoadingId === u.booking.booking_id} className="px-2 py-1.5 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 disabled:opacity-50">Out</button>
+                            )}
+                            {u.booking?.booking_id && Number(u.booking.remaining_amount ?? 0) > 0 && (
+                              <button onClick={() => payBooking(Number(u.booking!.booking_id))} disabled={actionLoadingId === u.booking.booking_id} className="px-2 py-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50">Thu</button>
+                            )}
                             <button onClick={() => startEdit(u)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit2 className="h-4 w-4" /></button>
                             <Link to={`/admin/rooms/${u.type_id}/units/${u.room_id}`} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"><ExternalLink className="h-4 w-4" /></Link>
                             <button onClick={() => handleDelete(u)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="h-4 w-4" /></button>

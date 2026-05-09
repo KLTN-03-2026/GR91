@@ -4,6 +4,7 @@ import { llm } from "./llm.js";
 import { tools } from "./tools.js";
 import { getHistory, saveHistory, getContext, saveContext } from "./session.js";
 import { initRag } from "./rag.js";
+import { logChatMessage } from "./db_logger.js";
 
 // Khởi tạo Agent
 const agent = createReactAgent({
@@ -138,6 +139,12 @@ export async function runAgent(input: string, options: { sessionId?: string, use
     ];
     await saveContext(sessionId, nextContext);
     await saveHistory(sessionId, nextHistory);
+
+    // Lưu vào database tĩnh (fire-and-forget)
+    Promise.all([
+      logChatMessage(sessionId, options.userId || null, 'USER', input),
+      logChatMessage(sessionId, options.userId || null, 'BOT', rawContent)
+    ]).catch(err => console.error("[Agent DB Log Error]:", err));
 
     return {
       text: rawContent || "Xin chào, em có thể giúp gì cho anh/chị?",
