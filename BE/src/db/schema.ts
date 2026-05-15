@@ -85,24 +85,7 @@ const statements = [
     FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
   )`,
 
-  // 10. room_inventory
-  `CREATE TABLE IF NOT EXISTS room_inventory (
-    inventory_id INT AUTO_INCREMENT PRIMARY KEY,
-    room_id      INT,
-    date         DATE NOT NULL,
-    is_available TINYINT(1) DEFAULT 1,
-    price        INT,
-    status       ENUM('AVAILABLE','PENDING','BOOKED','BLOCKED') DEFAULT 'AVAILABLE',
-    booking_id   INT NULL,
-    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE (room_id, date),
-    KEY idx_room_date_status (room_id, date, status),
-    KEY idx_booking_id (booking_id),
-    FOREIGN KEY (room_id)    REFERENCES rooms(room_id)    ON DELETE CASCADE,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE SET NULL
-  )`,
-
-  // 11. room_prices (giá override theo ngày cho từng phòng)
+  // 10. room_prices (giá override theo ngày cho từng phòng)
   `CREATE TABLE IF NOT EXISTS room_prices (
     id      INT AUTO_INCREMENT PRIMARY KEY,
     room_id INT,
@@ -112,7 +95,7 @@ const statements = [
     FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
   )`,
 
-  // 12. room_type_prices (giá override theo ngày cho loại phòng)
+  // 11. room_type_prices (giá override theo ngày cho loại phòng)
   `CREATE TABLE IF NOT EXISTS room_type_prices (
     id      INT AUTO_INCREMENT PRIMARY KEY,
     type_id INT,
@@ -121,7 +104,7 @@ const statements = [
     FOREIGN KEY (type_id) REFERENCES room_types(type_id) ON DELETE CASCADE
   )`,
 
-  // 13. pricing_rules (quy tắc giá theo giờ check-in/out)
+  // 12. pricing_rules (quy tắc giá theo giờ check-in/out)
   `CREATE TABLE IF NOT EXISTS pricing_rules (
     rule_id     INT AUTO_INCREMENT PRIMARY KEY,
     rule_type   ENUM('checkin','checkout') NOT NULL,
@@ -133,7 +116,7 @@ const statements = [
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`,
 
-  // 14. users
+  // 13. users
   `CREATE TABLE IF NOT EXISTS users (
     user_id    INT AUTO_INCREMENT PRIMARY KEY,
     username   VARCHAR(50) UNIQUE,
@@ -144,13 +127,13 @@ const statements = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`,
 
-  // 15. roles
+  // 14. roles
   `CREATE TABLE IF NOT EXISTS roles (
     role_id   INT AUTO_INCREMENT PRIMARY KEY,
     role_name VARCHAR(50) UNIQUE
   )`,
 
-  // 16. user_roles
+  // 15. user_roles
   `CREATE TABLE IF NOT EXISTS user_roles (
     user_id INT,
     role_id INT,
@@ -159,20 +142,26 @@ const statements = [
     FOREIGN KEY (role_id) REFERENCES roles(role_id)  ON DELETE CASCADE
   )`,
 
-  // 17. bookings
+  // 16. bookings
   `CREATE TABLE IF NOT EXISTS bookings (
     booking_id       INT AUTO_INCREMENT PRIMARY KEY,
     user_id          INT,
     total_price      INT,
-    paid_amount      INT DEFAULT 0,
-    remaining_amount INT DEFAULT 0,
-    status           ENUM('PENDING','CONFIRMED','COMPLETED','CANCELLED') DEFAULT 'PENDING',
+    paid_amount      DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    remaining_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    status           ENUM('PENDING','CONFIRMED','CHECKED_IN','COMPLETED','CANCELLED','PARTIALLY_PAID') NOT NULL DEFAULT 'PENDING',
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at       DATETIME NULL DEFAULT NULL,
+    payment_policy   ENUM('FULL','DEPOSIT','PAY_AT_HOTEL') NOT NULL DEFAULT 'FULL',
+    guarantee_type   ENUM('NONE','CARD_HOLD') DEFAULT 'NONE',
+    no_show_fee      DECIMAL(12,2) DEFAULT 0.00,
+    KEY idx_booking_user (user_id),
+    KEY idx_bookings_payment_policy (payment_policy),
+    KEY idx_bookings_status_payment (status, payment_policy),
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
   )`,
 
-  // 18. booking_rooms
+  // 17. booking_rooms
   `CREATE TABLE IF NOT EXISTS booking_rooms (
     booking_room_id INT AUTO_INCREMENT PRIMARY KEY,
     booking_id      INT,
@@ -186,7 +175,7 @@ const statements = [
     FOREIGN KEY (room_id)    REFERENCES rooms(room_id)
   )`,
 
-  // 19. booking_guests
+  // 18. booking_guests
   `CREATE TABLE IF NOT EXISTS booking_guests (
     booking_guest_id INT AUTO_INCREMENT PRIMARY KEY,
     booking_id       INT,
@@ -196,18 +185,54 @@ const statements = [
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE CASCADE
   )`,
 
+  // 19. room_inventory
+  `CREATE TABLE IF NOT EXISTS room_inventory (
+    inventory_id INT AUTO_INCREMENT PRIMARY KEY,
+    room_id      INT,
+    date         DATE NOT NULL,
+    is_available TINYINT(1) DEFAULT 1,
+    price        INT,
+    status       ENUM('AVAILABLE','PENDING','BOOKED','BLOCKED') DEFAULT 'AVAILABLE',
+    booking_id   INT NULL,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_room_date (room_id, date),
+    KEY idx_inventory_available (is_available, date),
+    KEY idx_room_date_status (room_id, date, status),
+    KEY idx_booking_id (booking_id),
+    FOREIGN KEY (room_id)    REFERENCES rooms(room_id)    ON DELETE CASCADE,
+    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE SET NULL
+  )`,
+
   // 20. payment_transactions
   `CREATE TABLE IF NOT EXISTS payment_transactions (
     payment_id       INT AUTO_INCREMENT PRIMARY KEY,
     booking_id       INT,
     amount           INT,
     method           VARCHAR(50),
-    gateway          VARCHAR(50) DEFAULT 'CASH',
+    gateway          ENUM('momo','vnpay','cash') DEFAULT 'cash',
+    type             ENUM('FULL','DEPOSIT','REMAINING') NOT NULL DEFAULT 'FULL',
+    idempotency_key  VARCHAR(100) NULL,
+    partner_code     VARCHAR(50) NULL,
     order_id         VARCHAR(100) NULL,
-    trans_id         VARCHAR(100) NULL,
+    request_id       VARCHAR(100) NULL,
+    trans_id         BIGINT NULL,
+    pay_url          TEXT,
+    deeplink         TEXT,
+    qr_code_url      TEXT,
+    result_code      INT NULL,
+    momo_message     VARCHAR(255) NULL,
+    response_time    TIMESTAMP NULL DEFAULT NULL,
+    signature        TEXT,
     status           ENUM('PENDING','SUCCESS','FAILED') DEFAULT 'PENDING',
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_unique_order_id (order_id),
+    UNIQUE KEY idx_unique_request_id (request_id),
     UNIQUE KEY unique_order (order_id, gateway),
+    KEY idx_idempotency_key (idempotency_key),
+    KEY idx_momo_order_id (order_id),
+    KEY idx_momo_request_id (request_id),
+    KEY idx_momo_trans_id (trans_id),
+    KEY idx_payment_gateway_status (gateway, status),
     FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
   )`,
 
@@ -256,14 +281,17 @@ const statements = [
 
   // 25. payment_logs
   `CREATE TABLE IF NOT EXISTS payment_logs (
-    log_id      INT AUTO_INCREMENT PRIMARY KEY,
-    booking_id  INT,
-    gateway     VARCHAR(50),
-    action      VARCHAR(100),
-    raw_data    JSON,
-    status      VARCHAR(50), 
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id) ON DELETE SET NULL
+    log_id       BIGINT AUTO_INCREMENT PRIMARY KEY,
+    payment_id   INT NOT NULL,
+    event_type   ENUM('INITIATE','WEBHOOK_RECEIVED','WEBHOOK_VERIFIED','SUCCESS','FAILED','REFUND') NOT NULL,
+    status       ENUM('PENDING','SUCCESS','FAILED') NOT NULL,
+    message      TEXT,
+    gateway_data JSON DEFAULT NULL,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_payment_logs_payment_id (payment_id),
+    KEY idx_payment_logs_created (created_at),
+    KEY idx_payment_logs_event (event_type),
+    FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id) ON DELETE CASCADE
   )`,
 ];
 

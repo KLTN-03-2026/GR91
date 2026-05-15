@@ -60,7 +60,7 @@ export const Footer: React.FC = () => {
           </div>
 
           {/* Contact */}
-          <div>
+          {/* <div>
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Liên hệ</h3>
             <ul className="space-y-3">
               <li className="flex items-center gap-2.5 text-sm text-gray-500">
@@ -76,7 +76,7 @@ export const Footer: React.FC = () => {
                 123 Đường ABC, Quận 1, TP.HCM
               </li>
             </ul>
-          </div>
+          </div> */}
         </div>
 
         <div className="border-t border-gray-100 pt-6 text-center text-xs text-gray-400">

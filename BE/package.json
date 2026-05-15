@@ -7,6 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:init": "tsx src/db/schema.ts",
+    "db:audit": "tsx src/db/audit_schema.ts",
+    "db:migrate:indexes": "tsx src/db/migrate_schema_indexes.ts",
     "db:seed": "tsx src/db/seed.ts"
   },
   "dependencies": {

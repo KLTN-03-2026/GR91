@@ -755,16 +755,21 @@ roomRouter.get('/recommendations', optionalAuth, async (req: AuthRequest, res: R
   try {
     const [roomTypes] = await conn.execute(`
       SELECT 
-        rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity, rt.description,
+        rt.type_id, rt.name AS type_name, rt.base_price, rt.capacity, rt.description, rt.area_sqm,
+        rc.name AS category_name,
         GROUP_CONCAT(DISTINCT a.name) AS amenities,
+        GROUP_CONCAT(DISTINCT CONCAT(bt.name, ':', rtb.quantity) ORDER BY bt.name SEPARATOR ',') AS beds,
         MIN(ri.url) AS image,
         MIN(r.room_id) AS first_room_id,
-        COALESCE((SELECT COUNT(*) FROM booking_rooms br JOIN rooms r ON br.room_id = r.room_id WHERE r.type_id = rt.type_id), 0) AS booking_count,
+        COALESCE((SELECT COUNT(*) FROM booking_rooms br JOIN rooms r2 ON br.room_id = r2.room_id WHERE r2.type_id = rt.type_id), 0) AS booking_count,
         COALESCE((SELECT ROUND(AVG(rating), 1) FROM reviews rv WHERE rv.room_type_id = rt.type_id AND rv.status = 'VISIBLE'), 0) AS rating
       FROM room_types rt
       JOIN rooms r ON rt.type_id = r.type_id AND r.status = 'ACTIVE'
+      LEFT JOIN room_categories rc ON rt.category_id = rc.category_id
       LEFT JOIN room_type_amenities rta ON rt.type_id = rta.type_id
       LEFT JOIN amenities a ON rta.amenity_id = a.amenity_id
+      LEFT JOIN room_type_beds rtb ON rt.type_id = rtb.type_id
+      LEFT JOIN bed_types bt ON rtb.bed_id = bt.bed_id
       LEFT JOIN room_images ri ON ri.room_id = r.room_id
       GROUP BY rt.type_id
     `) as any[];
@@ -772,6 +777,10 @@ roomRouter.get('/recommendations', optionalAuth, async (req: AuthRequest, res: R
     const types = roomTypes.map((t: any) => ({
       ...t,
       amenities: t.amenities ? t.amenities.split(',') : [],
+      beds: t.beds ? t.beds.split(',').map((b: string) => {
+        const [name, qty] = b.split(':');
+        return { name, quantity: Number(qty) };
+      }) : [],
       base_price: Number(t.base_price),
       booking_count: Number(t.booking_count),
       rating: Number(t.rating)
